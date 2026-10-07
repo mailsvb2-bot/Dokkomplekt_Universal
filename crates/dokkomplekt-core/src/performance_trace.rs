@@ -139,6 +139,9 @@ pub struct PerformanceTraceContext {
     /// Opaque local identifier only. Never a path, name, case number or source text.
     pub run_id: String,
     pub app_version: String,
+    /// SHA-256 of the immutable processed source when the journey owns one.
+    /// Manual/recovery traces may legitimately have no source identity.
+    pub source_sha256: Option<String>,
     pub class: PerformanceClass,
     pub cache_state: PerformanceCacheState,
     pub run_phase: PerformanceRunPhase,
@@ -196,6 +199,17 @@ impl PerformanceTraceContext {
         }
         if !valid_opaque_identifier(&self.app_version) || self.app_version.len() > 64 {
             return Err("performance app_version must be a short ASCII version token".into());
+        }
+        if let Some(source_sha256) = self.source_sha256.as_deref() {
+            if source_sha256.len() != 64
+                || !source_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err(
+                    "performance source_sha256 must be a lowercase SHA-256 hex digest".into(),
+                );
+            }
         }
         if self.batch_size == 0 {
             return Err("performance batch_size must be positive".into());
@@ -354,6 +368,7 @@ mod tests {
         PerformanceTraceContext {
             run_id: "run_01HXYZ".into(),
             app_version: "1.0.0".into(),
+            source_sha256: Some("a".repeat(64)),
             class: PerformanceClass::TypicalDocx,
             cache_state: PerformanceCacheState::WarmCache,
             run_phase: PerformanceRunPhase::RepeatRun,
@@ -418,6 +433,19 @@ mod tests {
 
         invalid.run_id = "Иванов Иван".into();
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn source_sha256_is_optional_but_strict_when_present() {
+        let mut valid = context();
+        valid.source_sha256 = None;
+        assert!(valid.validate().is_ok());
+
+        valid.source_sha256 = Some("A".repeat(64));
+        assert!(valid.validate().is_err());
+
+        valid.source_sha256 = Some("a".repeat(63));
+        assert!(valid.validate().is_err());
     }
 
     #[test]
@@ -664,6 +692,7 @@ mod tests {
                 "pdf_used",
                 "run_id",
                 "run_phase",
+                "source_sha256",
                 "runtime_layout_used",
                 "workload",
             ]

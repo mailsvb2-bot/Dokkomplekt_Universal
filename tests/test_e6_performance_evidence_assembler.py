@@ -44,6 +44,9 @@ def reference(tmp_path: Path) -> Path:
             "metric_bindings": {
                 metric: f"series-{metric}" for metric in gate.CANONICAL_METRICS
             },
+            "coverage_sources": {
+                "table_heavy": ["a" * 64],
+            },
             "resource_budgets": {
                 "cpu_percent_peak": 95,
                 "peak_rss_bytes": 2_000_000_000,
@@ -108,6 +111,7 @@ def observation(
     class_name: str = "typical_docx",
     cache_state: str = "warm_cache",
     run_kind: str = "single_document",
+    trace_source_sha256: str | None = None,
 ) -> Path:
     if conditions is None:
         conditions = {"questions_present": False}
@@ -134,6 +138,7 @@ def observation(
             "sample_derivation": derivation,
             "trace_run_id": run_id,
             "trace_app_version": "18.4.7",
+            "trace_source_sha256": trace_source_sha256,
             "trace_workload": "single_document",
             "trace_batch_size": 1,
             "trace_feature_flags": {
@@ -208,6 +213,7 @@ def test_assembler_accepts_non_bound_series_for_required_coverage(
         trace_hash="c" * 64,
         series_id="coverage-table-heavy-button",
         class_name="table_heavy",
+        trace_source_sha256="a" * 64,
     )
     result = assemble.build_evidence(
         TARGETS,
@@ -224,6 +230,30 @@ def test_assembler_accepts_non_bound_series_for_required_coverage(
     verdict = gate.evaluate(TARGETS, reference_path, evidence_path)
     assert verdict["result"] == "FAIL"
     assert any("bound series is missing" in error for error in verdict["errors"])
+
+
+def test_assembler_rejects_coverage_source_not_predeclared_for_class(
+    tmp_path: Path,
+) -> None:
+    reference_path = reference(tmp_path)
+    observation(
+        tmp_path,
+        reference_path,
+        "coverage-wrong-source",
+        run_id="run-coverage-wrong",
+        trace_hash="d" * 64,
+        series_id="coverage-table-heavy-button",
+        class_name="table_heavy",
+        trace_source_sha256="b" * 64,
+    )
+    with pytest.raises(ValueError, match="not bound to a predeclared source"):
+        assemble.build_evidence(
+            TARGETS,
+            reference_path,
+            tmp_path / "observations",
+            protocol(tmp_path),
+            resources(tmp_path, reference_path),
+        )
 
 
 def test_rejects_metric_derivation_tampering(tmp_path: Path) -> None:

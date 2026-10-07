@@ -27,7 +27,7 @@ TRACE_OBSERVATION_KEYS = {
     "measurement_plan_sha256", "trace_sha256", "reference_id", "corpus_id",
     "series_id", "metric", "class", "cache_state", "run_kind", "conditions",
     "complexity", "warmup", "sample_ms", "sample_derivation", "trace_run_id",
-    "trace_app_version", "trace_workload", "trace_batch_size",
+    "trace_app_version", "trace_source_sha256", "trace_workload", "trace_batch_size",
     "trace_feature_flags",
 }
 TRACE_FEATURE_KEYS = {"ocr_used", "runtime_layout_used", "pdf_used"}
@@ -193,6 +193,29 @@ def _validate_trace_observation(
         or value.get("trace_app_version") != environment.get("app_version")
     ):
         raise ValueError(f"{path}: trace app version differs from bound reference")
+
+    trace_source_sha256 = value.get("trace_source_sha256")
+    if trace_source_sha256 is not None and (
+        not isinstance(trace_source_sha256, str)
+        or len(trace_source_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in trace_source_sha256)
+    ):
+        raise ValueError(f"{path}: trace_source_sha256 must be lowercase SHA-256 hex or null")
+    if not is_bound_slo_series:
+        coverage_sources = reference.get("coverage_sources")
+        allowed_sources = (
+            coverage_sources.get(class_name)
+            if isinstance(coverage_sources, dict)
+            else None
+        )
+        if (
+            trace_source_sha256 is None
+            or not isinstance(allowed_sources, list)
+            or trace_source_sha256 not in allowed_sources
+        ):
+            raise ValueError(
+                f"{path}: non-bound coverage observation is not bound to a predeclared source"
+            )
 
     feature_flags = value.get("trace_feature_flags")
     if not isinstance(feature_flags, dict) or set(feature_flags) != TRACE_FEATURE_KEYS:
@@ -428,6 +451,8 @@ def build_evidence(
                 "trace_sha256": trace_hash,
                 "measurement_plan_sha256": observation["measurement_plan_sha256"],
             }
+            if observation.get("trace_source_sha256") is not None:
+                manifest_entry["trace_source_sha256"] = observation["trace_source_sha256"]
         else:
             measurement_hash = observation["measurement_sha256"]
             measurement_id = observation["measurement_id"]

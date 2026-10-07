@@ -43,6 +43,7 @@ CONTEXT_KEYS = {
     "runtime_layout_used",
     "pdf_used",
 }
+CONTEXT_OPTIONAL_KEYS = {"source_sha256"}
 STAGE_KEYS = {"stage", "duration_ms"}
 PLAN_KEYS = {
     "schema",
@@ -57,6 +58,7 @@ PLAN_KEYS = {
     "complexity",
     "warmup",
     "expected_app_version",
+    "expected_source_sha256",
     "expected_workload",
     "expected_ocr_used",
     "expected_runtime_layout_used",
@@ -161,7 +163,15 @@ def _validate_trace(trace: dict[str, Any]) -> dict[str, Any]:
     context = trace.get("context")
     if not isinstance(context, dict):
         raise ValueError("trace.context must be an object")
-    _exact_keys(context, CONTEXT_KEYS, "trace.context")
+    actual_context_keys = set(context)
+    missing_context_keys = CONTEXT_KEYS - actual_context_keys
+    unexpected_context_keys = actual_context_keys - CONTEXT_KEYS - CONTEXT_OPTIONAL_KEYS
+    if missing_context_keys or unexpected_context_keys:
+        raise ValueError(
+            "trace.context keys must be closed: "
+            f"missing={sorted(missing_context_keys)} "
+            f"unexpected={sorted(unexpected_context_keys)}"
+        )
 
     run_id = _nonempty_string(context.get("run_id"), "trace.context.run_id")
     if len(run_id) > 128 or not all(
@@ -173,6 +183,14 @@ def _validate_trace(trace: dict[str, Any]) -> dict[str, Any]:
     app_version = _nonempty_string(
         context.get("app_version"), "trace.context.app_version"
     )
+    source_sha256 = context.get("source_sha256")
+    if source_sha256 is not None:
+        if (
+            not isinstance(source_sha256, str)
+            or len(source_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in source_sha256)
+        ):
+            raise ValueError("trace.context.source_sha256 must be a lowercase SHA-256 hex digest or null")
     if context.get("class") not in TRACE_CLASSES:
         raise ValueError("trace.context.class is not canonical")
     if context.get("cache_state") not in TRACE_CACHE_STATES:
@@ -248,6 +266,7 @@ def _validate_trace(trace: dict[str, Any]) -> dict[str, Any]:
         "human_wait_ms": human_wait,
         "run_id": run_id,
         "app_version": app_version,
+        "source_sha256": source_sha256,
     }
 
 
@@ -298,6 +317,13 @@ def _validate_plan(
     expected_app_version = _nonempty_string(
         plan.get("expected_app_version"), "plan.expected_app_version"
     )
+    expected_source_sha256 = plan.get("expected_source_sha256")
+    if expected_source_sha256 is not None and (
+        not isinstance(expected_source_sha256, str)
+        or len(expected_source_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in expected_source_sha256)
+    ):
+        raise ValueError("plan.expected_source_sha256 must be a lowercase SHA-256 hex digest or null")
     environment = reference.get("environment")
     if not isinstance(environment, dict) or environment.get("app_version") != expected_app_version:
         raise ValueError("plan.expected_app_version must equal reference environment app_version")
@@ -315,6 +341,19 @@ def _validate_plan(
     # predeclared series are allowed solely to provide the Canon's required
     # corpus/cache/run-kind coverage; the evaluator never uses them for the
     # bound metric verdict.
+    if not is_bound_slo_series:
+        if expected_source_sha256 is None:
+            raise ValueError("coverage series requires expected_source_sha256")
+        coverage_sources = reference.get("coverage_sources")
+        if not isinstance(coverage_sources, dict):
+            raise ValueError("reference coverage_sources must bind non-bound coverage series")
+        allowed_sources = coverage_sources.get(class_name)
+        if (
+            not isinstance(allowed_sources, list)
+            or expected_source_sha256 not in allowed_sources
+        ):
+            raise ValueError("plan.expected_source_sha256 is not predeclared for this coverage class")
+
     if is_bound_slo_series:
         requirements = gate.SLO_SERIES_REQUIREMENTS[metric]
         required_class = requirements.get("class")
@@ -369,6 +408,9 @@ def _validate_trace_against_plan(trace_info: dict[str, Any], plan: dict[str, Any
     context = trace_info["context"]
     if trace_info["app_version"] != plan["expected_app_version"]:
         raise ValueError("trace app_version does not match the predeclared measurement plan")
+    if plan.get("expected_source_sha256") is not None:
+        if trace_info.get("source_sha256") != plan["expected_source_sha256"]:
+            raise ValueError("trace source_sha256 does not match the predeclared measurement plan")
     if context["workload"] != plan["expected_workload"]:
         raise ValueError("trace workload does not match the predeclared measurement plan")
     flag_pairs = (
@@ -462,6 +504,7 @@ def build_observation(
         "sample_derivation": derivation,
         "trace_run_id": trace_info["run_id"],
         "trace_app_version": trace_info["app_version"],
+        "trace_source_sha256": trace_info["source_sha256"],
         "trace_workload": trace_info["context"]["workload"],
         "trace_batch_size": trace_info["context"]["batch_size"],
         "trace_feature_flags": {

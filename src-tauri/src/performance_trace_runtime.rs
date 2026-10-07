@@ -123,35 +123,39 @@ pub(crate) fn persist_manual_batch_trace(
     )
 }
 
+pub(crate) struct AutomaticPerformanceTraceContext<'a> {
+    pub repeat_run: bool,
+    pub source_sha256: &'a str,
+    pub ocr_used: bool,
+    pub pdf_used: bool,
+}
+
 pub(crate) fn persist_automatic_trace(
     app: &tauri::AppHandle,
     batch_size: u32,
     stages: Vec<PerformanceStageMeasurement>,
     end_to_end_ms: u64,
-    repeat_run: bool,
-    source_sha256: &str,
-    ocr_used: bool,
-    pdf_used: bool,
+    context: AutomaticPerformanceTraceContext<'_>,
 ) -> Result<PathBuf, String> {
     let trace = PerformanceTrace::new(
         PerformanceTraceContext {
             run_id: uuid::Uuid::new_v4().simple().to_string(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
-            source_sha256: Some(source_sha256.to_string()),
+            source_sha256: Some(context.source_sha256.to_string()),
             class: PerformanceClass::Unclassified,
             cache_state: PerformanceCacheState::Unclassified,
-            run_phase: if repeat_run {
+            run_phase: if context.repeat_run {
                 PerformanceRunPhase::RepeatRun
             } else {
                 PerformanceRunPhase::FirstRun
             },
             workload: performance_workload(batch_size),
             batch_size,
-            ocr_used,
+            ocr_used: context.ocr_used,
             // Automatic template replay uses the existing user template layout.
             // Runtime-layout synthesis is a different path and is not invoked here.
             runtime_layout_used: false,
-            pdf_used,
+            pdf_used: context.pdf_used,
         },
         stages,
         end_to_end_ms,

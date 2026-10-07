@@ -101,6 +101,7 @@ class PerformanceTraceObservationTests(unittest.TestCase):
         workload: str = "single_document",
         batch_size: int = 1,
         run_phase: str = "repeat_run",
+        cache_state: str = "warm_cache",
         ocr: bool = False,
         runtime_layout: bool = False,
         pdf: bool = False,
@@ -121,7 +122,7 @@ class PerformanceTraceObservationTests(unittest.TestCase):
                 "app_version": "18.4.7",
                 "source_sha256": source_sha256,
                 "class": "unclassified",
-                "cache_state": "unclassified",
+                "cache_state": cache_state,
                 "run_phase": run_phase,
                 "workload": workload,
                 "batch_size": batch_size,
@@ -152,6 +153,17 @@ class PerformanceTraceObservationTests(unittest.TestCase):
         self._write(plan_path, plan)
         self._write(trace_path, trace)
         return obs.build_observation(TARGETS, reference_path, plan_path, trace_path)
+
+    def test_cache_state_must_match_predeclared_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(
+                ValueError, "trace cache_state does not match plan.cache_state"
+            ):
+                self._build(
+                    Path(raw),
+                    self._plan(cache_state="cold_cache"),
+                    self._trace(cache_state="warm_cache"),
+                )
 
     def test_button_to_ready_observation_is_hash_bound_and_privacy_safe(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

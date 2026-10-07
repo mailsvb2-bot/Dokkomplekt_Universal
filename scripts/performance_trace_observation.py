@@ -411,6 +411,8 @@ def _validate_trace_against_plan(trace_info: dict[str, Any], plan: dict[str, Any
     if plan.get("expected_source_sha256") is not None:
         if trace_info.get("source_sha256") != plan["expected_source_sha256"]:
             raise ValueError("trace source_sha256 does not match the predeclared measurement plan")
+    if context["cache_state"] != plan["cache_state"]:
+        raise ValueError("trace cache_state does not match plan.cache_state")
     if context["workload"] != plan["expected_workload"]:
         raise ValueError("trace workload does not match the predeclared measurement plan")
     flag_pairs = (

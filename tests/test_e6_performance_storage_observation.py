@@ -9,6 +9,7 @@ import pytest
 from scripts import assemble_performance_evidence as assemble
 from scripts import performance_slo_gate as gate
 from scripts import performance_storage_observation as storage
+from scripts import performance_storage_probe as probe
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def reference(tmp_path: Path) -> Path:
+def reference(tmp_path: Path, class_name: str, source_sha256: str) -> Path:
     targets = gate.load_object(TARGETS)
     return write_json(
         tmp_path / "reference.json",
@@ -45,10 +46,7 @@ def reference(tmp_path: Path) -> Path:
             "metric_bindings": {
                 metric: f"series-{metric}" for metric in gate.CANONICAL_METRICS
             },
-            "coverage_sources": {
-                "slow_storage": ["a" * 64],
-                "network_storage": ["b" * 64],
-            },
+            "coverage_sources": {class_name: [source_sha256]},
             "resource_budgets": {
                 "cpu_percent_peak": 95,
                 "peak_rss_bytes": 2_000_000_000,
@@ -63,8 +61,7 @@ def reference(tmp_path: Path) -> Path:
     )
 
 
-def plan(tmp_path: Path, class_name: str) -> Path:
-    source = "a" * 64 if class_name == "slow_storage" else "b" * 64
+def plan(tmp_path: Path, class_name: str, source_sha256: str) -> Path:
     return write_json(
         tmp_path / f"{class_name}-plan.json",
         {
@@ -80,20 +77,13 @@ def plan(tmp_path: Path, class_name: str) -> Path:
             "complexity": None,
             "warmup": False,
             "expected_app_version": "18.4.7",
-            "expected_source_sha256": source,
+            "expected_source_sha256": source_sha256,
             "measurement_kind": storage.MEASUREMENT_KIND,
         },
     )
 
 
-def measurement(
-    tmp_path: Path,
-    class_name: str,
-    *,
-    verification_method: str | None = None,
-) -> Path:
-    source = "a" * 64 if class_name == "slow_storage" else "b" * 64
-    expected_method = storage.SUPPORTED_CLASSES[class_name]
+def measurement(tmp_path: Path, class_name: str, source_sha256: str) -> Path:
     return write_json(
         tmp_path / f"{class_name}-measurement.json",
         {
@@ -106,11 +96,35 @@ def measurement(
             "conditions": {"questions_present": False},
             "instrument": "hardware_harness_monotonic_clock",
             "installed_build": True,
-            "source_sha256": source,
-            "storage_class": class_name,
-            "verification_method": verification_method or expected_method,
+            "source_sha256": source_sha256,
         },
     )
+
+
+def slow_probe(tmp_path: Path) -> tuple[Path, str]:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"x" * 8192)
+    document = probe._slow_probe(source, throttle_bytes_per_sec=1_000_000)
+    probe.validate_probe(document)
+    return write_json(tmp_path / "slow-probe.json", document), document["source_sha256"]
+
+
+def network_probe(tmp_path: Path, source_sha256: str) -> Path:
+    document = {
+        "schema": probe.SCHEMA,
+        "producer": probe.PRODUCER,
+        "storage_class": "network_storage",
+        "source_sha256": source_sha256,
+        "byte_count": 8192,
+        "duration_ms": 10.0,
+        "observed_bytes_per_sec": 819200.0,
+        "verification": {
+            "path_kind": "unc",
+            "windows_drive_type": "remote",
+        },
+    }
+    probe.validate_probe(document)
+    return write_json(tmp_path / "network-probe.json", document)
 
 
 def protocol(tmp_path: Path) -> Path:
@@ -148,44 +162,69 @@ def resources(tmp_path: Path, reference_path: Path) -> Path:
     )
 
 
+def test_slow_probe_performs_controlled_read_and_is_hash_bound(tmp_path: Path) -> None:
+    probe_path, source_sha256 = slow_probe(tmp_path)
+    document = gate.load_object(probe_path)
+    assert document["producer"] == probe.PRODUCER
+    assert document["storage_class"] == "slow_storage"
+    assert document["source_sha256"] == source_sha256
+    assert document["verification"]["mode"] == "controlled_read_throttle"
+    assert document["observed_bytes_per_sec"] <= (
+        document["verification"]["configured_bytes_per_sec"] * 1.10
+    )
+
+
 @pytest.mark.parametrize("class_name", ["slow_storage", "network_storage"])
-def test_storage_observation_is_typed_and_coverage_only(
+def test_storage_observation_is_probe_bound_and_coverage_only(
     tmp_path: Path, class_name: str
 ) -> None:
-    reference_path = reference(tmp_path)
+    if class_name == "slow_storage":
+        probe_path, source_sha256 = slow_probe(tmp_path)
+    else:
+        source_sha256 = "b" * 64
+        probe_path = network_probe(tmp_path, source_sha256)
+    reference_path = reference(tmp_path, class_name, source_sha256)
     observation = storage.build_observation(
         TARGETS,
         reference_path,
-        plan(tmp_path, class_name),
-        measurement(tmp_path, class_name),
+        plan(tmp_path, class_name, source_sha256),
+        measurement(tmp_path, class_name, source_sha256),
+        probe_path,
     )
 
     assert observation["schema"] == storage.OBSERVATION_SCHEMA
     assert observation["claim"] == storage.OBSERVATION_CLAIM
     assert observation["class"] == class_name
     assert observation["storage_class"] == class_name
+    assert observation["probe_sha256"] == sha256(probe_path)
     assert observation["sample_derivation"] == "direct_storage_condition_measurement"
     assert observation["series_id"] != "series-button_to_ready"
 
 
-def test_network_storage_requires_unc_verification_method(tmp_path: Path) -> None:
-    reference_path = reference(tmp_path)
-    with pytest.raises(ValueError, match="windows_unc_path_probe"):
+def test_rejects_forged_network_probe_verification(tmp_path: Path) -> None:
+    source_sha256 = "b" * 64
+    probe_path = network_probe(tmp_path, source_sha256)
+    document = gate.load_object(probe_path)
+    document["verification"] = {
+        "mode": "controlled_read_throttle",
+        "configured_bytes_per_sec": 1000,
+    }
+    write_json(probe_path, document)
+    reference_path = reference(tmp_path, "network_storage", source_sha256)
+    with pytest.raises(ValueError, match="UNC/DRIVE_REMOTE"):
         storage.build_observation(
             TARGETS,
             reference_path,
-            plan(tmp_path, "network_storage"),
-            measurement(
-                tmp_path,
-                "network_storage",
-                verification_method="controlled_io_throttle_probe",
-            ),
+            plan(tmp_path, "network_storage", source_sha256),
+            measurement(tmp_path, "network_storage", source_sha256),
+            probe_path,
         )
 
 
 def test_storage_source_must_be_predeclared_for_class(tmp_path: Path) -> None:
-    reference_path = reference(tmp_path)
-    plan_path = plan(tmp_path, "slow_storage")
+    probe_path, source_sha256 = slow_probe(tmp_path)
+    reference_path = reference(tmp_path, "slow_storage", source_sha256)
+    plan_path = plan(tmp_path, "slow_storage", source_sha256)
     document = gate.load_object(plan_path)
     document["expected_source_sha256"] = "c" * 64
     write_json(plan_path, document)
@@ -194,17 +233,20 @@ def test_storage_source_must_be_predeclared_for_class(tmp_path: Path) -> None:
             TARGETS,
             reference_path,
             plan_path,
-            measurement(tmp_path, "slow_storage"),
+            measurement(tmp_path, "slow_storage", source_sha256),
+            probe_path,
         )
 
 
 def test_assembler_accepts_storage_coverage_without_binding_slo(tmp_path: Path) -> None:
-    reference_path = reference(tmp_path)
+    probe_path, source_sha256 = slow_probe(tmp_path)
+    reference_path = reference(tmp_path, "slow_storage", source_sha256)
     observation = storage.build_observation(
         TARGETS,
         reference_path,
-        plan(tmp_path, "slow_storage"),
-        measurement(tmp_path, "slow_storage"),
+        plan(tmp_path, "slow_storage", source_sha256),
+        measurement(tmp_path, "slow_storage", source_sha256),
+        probe_path,
     )
     write_json(tmp_path / "observations" / "slow.json", observation)
 
@@ -217,6 +259,7 @@ def test_assembler_accepts_storage_coverage_without_binding_slo(tmp_path: Path) 
     )
     assert evidence["series"][0]["class"] == "slow_storage"
     assert evidence["series"][0]["id"] == "coverage-slow_storage-button"
+    assert evidence["source_observations"][0]["probe_sha256"] == sha256(probe_path)
 
     evidence_path = write_json(tmp_path / "evidence.json", evidence)
     verdict = gate.evaluate(TARGETS, reference_path, evidence_path)

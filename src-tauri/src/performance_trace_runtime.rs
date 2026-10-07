@@ -137,6 +137,7 @@ pub(crate) fn persist_automatic_trace(
         PerformanceTraceContext {
             run_id: uuid::Uuid::new_v4().simple().to_string(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
+            source_sha256: Some(source_sha256.to_string()),
             class: PerformanceClass::Unclassified,
             cache_state: PerformanceCacheState::Unclassified,
             run_phase: if repeat_run {
@@ -172,6 +173,7 @@ pub(crate) fn persist_failed_recovery_trace(
         PerformanceTraceContext {
             run_id: uuid::Uuid::new_v4().simple().to_string(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
+            source_sha256: None,
             class: PerformanceClass::Unclassified,
             cache_state: PerformanceCacheState::Unclassified,
             run_phase: PerformanceRunPhase::Unclassified,

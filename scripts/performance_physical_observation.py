@@ -26,6 +26,8 @@ PHYSICAL_METRICS = {
     "visible_action_response": "visible_action_to_ui_response",
     "prompt_form_ready": "prompt_plan_to_form_ready",
 }
+PHYSICAL_CLASS = "unclassified"
+
 ALLOWED_INSTRUMENTS = {
     "hardware_harness_monotonic_clock",
     "windows_etw_monotonic_clock",
@@ -135,9 +137,11 @@ def _validate_plan(
         raise ValueError("plan.series_id is not the reference-bound series for this metric")
 
     class_name = plan.get("class")
-    allowed_classes = set(gate.CANONICAL_CORPUS_CLASSES) | set(gate.CANONICAL_SPECIAL_CLASSES)
-    if class_name not in allowed_classes:
-        raise ValueError("plan.class is not a Canon performance class")
+    if class_name != PHYSICAL_CLASS:
+        raise ValueError(
+            "physical/UI measurement plan.class must be unclassified; "
+            "UI/startup timings cannot prove corpus or special-class coverage"
+        )
     if plan.get("cache_state") not in gate.CANONICAL_CACHE_STATES:
         raise ValueError("plan.cache_state is not canonical")
     if plan.get("run_kind") not in gate.CANONICAL_RUN_KINDS:

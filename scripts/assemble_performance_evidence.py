@@ -14,6 +14,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from scripts import performance_benchmark_harness as benchmark_harness
 from scripts import performance_physical_observation as physical_obs
 from scripts import performance_slo_gate as gate
 from scripts import performance_storage_observation as storage_obs
@@ -29,7 +30,7 @@ TRACE_OBSERVATION_KEYS = {
     "series_id", "metric", "class", "cache_state", "run_kind", "conditions",
     "complexity", "warmup", "sample_ms", "sample_derivation", "trace_run_id",
     "trace_app_version", "trace_source_sha256", "trace_workload", "trace_batch_size",
-    "trace_feature_flags",
+    "trace_feature_flags", "benchmark_context_sha256",
 }
 TRACE_FEATURE_KEYS = {"ocr_used", "runtime_layout_used", "pdf_used"}
 STORAGE_OBSERVATION_KEYS = {
@@ -198,6 +199,13 @@ def _validate_trace_observation(
     for key in ("measurement_plan_sha256", "trace_sha256"):
         if not _is_sha256(value.get(key)):
             raise ValueError(f"{path}: {key} must be lowercase SHA-256")
+    benchmark_context_sha256 = value.get("benchmark_context_sha256")
+    if benchmark_context_sha256 is not None and not _is_sha256(
+        benchmark_context_sha256
+    ):
+        raise ValueError(
+            f"{path}: benchmark_context_sha256 must be lowercase SHA-256 or null"
+        )
     run_id = value.get("trace_run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError(f"{path}: trace_run_id must be non-empty")
@@ -507,6 +515,49 @@ def _validate_observation(
     raise ValueError(f"{path}: unsupported observation schema: {schema!r}")
 
 
+def _validate_benchmark_context_artifact(
+    observation: dict[str, Any],
+    benchmark_contexts_dir: Path | None,
+) -> None:
+    expected_sha256 = observation.get("benchmark_context_sha256")
+    if expected_sha256 is None:
+        return
+    if not _is_sha256(expected_sha256):
+        raise ValueError("benchmark_context_sha256 must be lowercase SHA-256 or null")
+    if benchmark_contexts_dir is None or not benchmark_contexts_dir.is_dir():
+        raise ValueError(
+            "benchmark-bound trace observation requires a benchmark-contexts directory"
+        )
+    matches = [
+        path
+        for path in sorted(benchmark_contexts_dir.glob("*.json"))
+        if path.is_file() and _sha256(path) == expected_sha256
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"benchmark context hash {expected_sha256} must resolve to exactly one file"
+        )
+    context = _load(matches[0])
+    benchmark_harness.validate_context(context)
+    if (
+        context.get("schema") != trace_obs.BENCHMARK_CONTEXT_SCHEMA
+        or context.get("producer") != trace_obs.BENCHMARK_CONTEXT_PRODUCER
+        or context.get("claim") != trace_obs.BENCHMARK_CONTEXT_CLAIM
+    ):
+        raise ValueError("benchmark context artifact provenance is invalid")
+    if context.get("measurement_plan_sha256") != observation.get("measurement_plan_sha256"):
+        raise ValueError("benchmark context artifact plan differs from observation")
+    if context.get("trace_sha256") != observation.get("trace_sha256"):
+        raise ValueError("benchmark context artifact trace differs from observation")
+    if context.get("source_sha256") != observation.get("trace_source_sha256"):
+        raise ValueError("benchmark context artifact source differs from observation")
+    if context.get("cache_state") != observation.get("cache_state"):
+        raise ValueError("benchmark context artifact cache_state differs from observation")
+    run_kind = observation.get("run_kind")
+    if run_kind in ("first_run", "repeat_run") and context.get("run_phase") != run_kind:
+        raise ValueError("benchmark context artifact run_phase differs from observation")
+
+
 def _validate_storage_probe_artifact(
     observation: dict[str, Any],
     storage_probes_dir: Path | None,
@@ -556,6 +607,7 @@ def build_evidence(
     protocol_path: Path,
     resources_path: Path,
     storage_probes_dir: Path | None = None,
+    benchmark_contexts_dir: Path | None = None,
 ) -> dict[str, Any]:
     targets = gate.load_object(targets_path)
     target_errors = gate.validate_targets(targets)
@@ -596,6 +648,9 @@ def build_evidence(
             reference=reference,
         )
         if observation["schema"] == trace_obs.OBSERVATION_SCHEMA:
+            _validate_benchmark_context_artifact(
+                observation, benchmark_contexts_dir
+            )
             trace_hash = observation["trace_sha256"]
             run_id = observation["trace_run_id"]
             if trace_hash in used_trace_hashes:
@@ -610,6 +665,10 @@ def build_evidence(
                 "trace_sha256": trace_hash,
                 "measurement_plan_sha256": observation["measurement_plan_sha256"],
             }
+            if observation.get("benchmark_context_sha256") is not None:
+                manifest_entry["benchmark_context_sha256"] = observation[
+                    "benchmark_context_sha256"
+                ]
             if observation.get("trace_source_sha256") is not None:
                 manifest_entry["trace_source_sha256"] = observation["trace_source_sha256"]
         else:
@@ -712,6 +771,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Directory containing exact storage probe artifacts referenced by storage observations",
     )
+    parser.add_argument(
+        "--benchmark-contexts",
+        type=Path,
+        help="Directory containing exact benchmark lifecycle contexts referenced by trace observations",
+    )
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -722,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
             args.protocol,
             args.resources,
             args.storage_probes,
+            args.benchmark_contexts,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"PERFORMANCE EVIDENCE ASSEMBLY FAILED: {exc}")

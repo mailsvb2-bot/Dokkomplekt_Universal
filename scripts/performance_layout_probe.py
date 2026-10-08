@@ -218,6 +218,14 @@ def validate_proof(proof: dict[str, Any]) -> None:
     ):
         if not _is_sha256(proof.get(key)):
             raise ValueError(f"layout proof {key} must be lowercase SHA-256")
+    proof_id = proof.get("proof_id")
+    if (
+        not isinstance(proof_id, str)
+        or not proof_id
+        or len(proof_id) > 128
+        or not all(ch.isascii() and (ch.isalnum() or ch in "-_.") for ch in proof_id)
+    ):
+        raise ValueError("layout proof proof_id must be an opaque ASCII identifier")
     for key in (
         "conversion_duration_ms",
         "application_elapsed_ms",
@@ -235,11 +243,47 @@ def validate_proof(proof: dict[str, Any]) -> None:
             raise ValueError(f"layout proof {key} must be non-empty")
     if not isinstance(proof.get("font_file_count"), int) or proof["font_file_count"] <= 0:
         raise ValueError("layout proof font_file_count must be positive")
-    if not isinstance(proof.get("pages"), list) or not proof["pages"]:
+    pages = proof.get("pages")
+    if not isinstance(pages, list) or not pages:
         raise ValueError("layout proof pages must be non-empty")
+    for index, page in enumerate(pages):
+        if not isinstance(page, dict) or set(page) != {
+            "width", "height", "dhash16", "distance"
+        }:
+            raise ValueError(f"layout proof page {index} keys must be closed")
+        if (
+            not isinstance(page.get("width"), int)
+            or isinstance(page.get("width"), bool)
+            or page["width"] <= 0
+            or not isinstance(page.get("height"), int)
+            or isinstance(page.get("height"), bool)
+            or page["height"] <= 0
+        ):
+            raise ValueError(f"layout proof page {index} dimensions are invalid")
+        dhash16 = page.get("dhash16")
+        if (
+            not isinstance(dhash16, str)
+            or len(dhash16) != 64
+            or any(ch not in "0123456789abcdef" for ch in dhash16)
+        ):
+            raise ValueError(f"layout proof page {index} dhash16 is invalid")
+        if (
+            not isinstance(page.get("distance"), int)
+            or isinstance(page.get("distance"), bool)
+            or page["distance"] < 0
+        ):
+            raise ValueError(f"layout proof page {index} distance is invalid")
     settings = proof.get("settings")
     if not isinstance(settings, dict) or set(settings) != {"dpi", "dhash_size", "tolerance"}:
         raise ValueError("layout proof settings must be closed")
+    if (
+        not isinstance(settings["dpi"], int)
+        or settings["dpi"] <= 0
+        or settings["dhash_size"] != 16
+        or not isinstance(settings["tolerance"], int)
+        or settings["tolerance"] < 0
+    ):
+        raise ValueError("layout proof settings values are invalid")
 
 
 def build_proof(

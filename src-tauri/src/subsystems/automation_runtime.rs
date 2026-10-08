@@ -384,13 +384,8 @@ fn perform_created_documents_intake(
     let normalization_session = universal_intake::create_owned_workspace_session(&workspace)?;
     let normalized =
         universal_intake::normalize_path(source_snapshot.path(), normalization_session.root(), 0)?;
-    let performance_ocr_used = matches!(
-        normalized.source_kind.as_str(),
-        "scanned_image" | "scanned_pdf_ocr" | "mixed_pdf_page_ocr"
-    ) || normalized
-        .warnings
-        .iter()
-        .any(|warning| warning.contains("OCR"));
+    let performance_ocr_used =
+        crate::performance_trace_runtime::automatic_source_uses_ocr(&normalized);
     let performance_pdf_used =
         crate::performance_trace_runtime::automatic_source_uses_pdf(&normalized);
     drop(normalization_session);

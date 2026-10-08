@@ -566,8 +566,23 @@ pub struct DocxCapabilityManifest {
 }
 
 impl DocxCapabilityManifest {
+    pub fn publication_blocking_issues(&self) -> Vec<String> {
+        let mut issues = self.blocking_issues.clone();
+        if self.runtime_layout_required
+            && !self.layout_verified
+            && !issues
+                .iter()
+                .any(|issue| issue == "runtime_layout_check_required")
+        {
+            issues.push("runtime_layout_check_required".into());
+        }
+        issues.sort();
+        issues.dedup();
+        issues
+    }
+
     pub fn publishable(&self) -> bool {
-        self.blocking_issues.is_empty()
+        self.publication_blocking_issues().is_empty()
     }
 }
 
@@ -4945,7 +4960,11 @@ mod tests {
 
         let manifest =
             inspect_docx_capabilities_file(&path).expect("inspect runtime layout capability");
-        assert!(manifest.publishable());
+        assert!(!manifest.publishable());
+        assert_eq!(
+            manifest.publication_blocking_issues(),
+            vec!["runtime_layout_check_required".to_string()]
+        );
         assert_eq!(manifest.schema_version, 2);
         assert!(manifest.runtime_layout_required);
         assert!(manifest

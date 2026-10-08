@@ -154,6 +154,43 @@ class PerformanceTraceObservationTests(unittest.TestCase):
         self._write(trace_path, trace)
         return obs.build_observation(TARGETS, reference_path, plan_path, trace_path)
 
+    def test_runtime_layout_requires_dedicated_execution_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            plan = self._plan(
+                class_name="runtime_layout",
+                expected_source_sha256="a" * 64,
+                runtime_layout=True,
+            )
+            plan["series_id"] = "coverage-runtime-layout-button"
+            with self.assertRaisesRegex(
+                ValueError, "requires dedicated runtime-layout execution evidence"
+            ):
+                self._build(
+                    Path(raw),
+                    plan,
+                    self._trace(
+                        source_sha256="a" * 64,
+                        runtime_layout=True,
+                    ),
+                )
+
+    def test_bound_runtime_layout_series_still_requires_dedicated_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            plan = self._plan(
+                "preflight_calculation",
+                class_name="runtime_layout",
+                conditions={"human_wait_excluded": True},
+                runtime_layout=True,
+            )
+            with self.assertRaisesRegex(
+                ValueError, "requires dedicated runtime-layout execution evidence"
+            ):
+                self._build(
+                    Path(raw),
+                    plan,
+                    self._trace(runtime_layout=True),
+                )
+
     def test_storage_classes_require_dedicated_evidence(self) -> None:
         for class_name in ("slow_storage", "network_storage"):
             with self.subTest(class_name=class_name):

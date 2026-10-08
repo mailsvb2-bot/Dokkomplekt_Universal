@@ -358,6 +358,7 @@ fn run_fpr17_pdf_export_e2e(
     Ok(serde_json::json!({
         "schema": "dokkomplekt.fpr17-pdf-export-e2e.v1",
         "action": "export_pdf",
+        "app_version": env!("CARGO_PKG_VERSION"),
         "source_name": source.file_name().and_then(|value| value.to_str()).unwrap_or("source.docx"),
         "source_size_bytes": source_size_bytes,
         "source_sha256": source_sha256,

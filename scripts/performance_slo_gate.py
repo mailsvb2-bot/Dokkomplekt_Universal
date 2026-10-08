@@ -393,9 +393,12 @@ def evaluate(
         class_name = require_nonempty_string(
             series.get("class"), f"series[{index}].class", errors
         )
-        if class_name and class_name not in (
-            set(CANONICAL_CORPUS_CLASSES) | set(CANONICAL_SPECIAL_CLASSES)
-        ):
+        allowed_series_classes = (
+            set(CANONICAL_CORPUS_CLASSES)
+            | set(CANONICAL_SPECIAL_CLASSES)
+            | {"unclassified"}
+        )
+        if class_name and class_name not in allowed_series_classes:
             errors.append(f"series[{index}].class is not a Canon class: {class_name}")
         cache_state = require_nonempty_string(
             series.get("cache_state"), f"series[{index}].cache_state", errors
@@ -436,7 +439,9 @@ def evaluate(
                 f"series[{series_id}]: {len(samples)} samples are below bound minimum {min_samples}"
             )
             continue
-        measured_classes.add(str(series.get("class", "")).strip())
+        series_class = str(series.get("class", "")).strip()
+        if series_class != "unclassified":
+            measured_classes.add(series_class)
         measured_cache_states.add(str(series.get("cache_state", "")).strip())
         measured_run_kinds.add(str(series.get("run_kind", "")).strip())
 

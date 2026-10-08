@@ -111,6 +111,7 @@ pub struct NormalizedLayoutItem {
 pub struct NormalizedSource {
     pub text: String,
     pub source_kind: String,
+    pub ocr_used: bool,
     pub warnings: Vec<String>,
     pub processed_files: Vec<PathBuf>,
     pub layout_items: Vec<NormalizedLayoutItem>,
@@ -472,6 +473,7 @@ pub fn normalize_path(
             text: extract_docx_text(path)
                 .map_err(|error| format!("Word-документ не читается: {error}"))?,
             source_kind: "word".into(),
+            ocr_used: false,
             warnings: Vec::new(),
             processed_files: vec![path.to_path_buf()],
             layout_items: Vec::new(),
@@ -861,6 +863,10 @@ fn normalize_pdf(path: &Path, workspace: &Path) -> Result<NormalizedSource, Stri
     }
     Ok(NormalizedSource {
         text,
+        ocr_used: matches!(
+            source_kind.as_str(),
+            "scanned_pdf_ocr" | "mixed_pdf_page_ocr"
+        ),
         source_kind,
         warnings,
         processed_files: vec![path.to_path_buf()],
@@ -878,6 +884,7 @@ fn normalize_image(path: &Path) -> Result<NormalizedSource, String> {
     Ok(NormalizedSource {
         text: page.text,
         source_kind: "scanned_image".into(),
+        ocr_used: true,
         warnings: vec![
             "Результат OCR требует риск-зависимой проверки критических полей.".into(),
             format!(
@@ -1250,6 +1257,7 @@ fn normalize_xlsx(path: &Path) -> Result<NormalizedSource, String> {
     Ok(NormalizedSource {
         text: output,
         source_kind: "spreadsheet".into(),
+        ocr_used: false,
         warnings,
         processed_files: vec![path.to_path_buf()],
         layout_items,
@@ -1588,6 +1596,7 @@ fn normalize_odt(path: &Path) -> Result<NormalizedSource, String> {
     Ok(NormalizedSource {
         text: generic_xml_to_text(&xml)?,
         source_kind: "odt".into(),
+        ocr_used: false,
         warnings: Vec::new(),
         processed_files: vec![path.to_path_buf()],
         layout_items: Vec::new(),
@@ -1599,6 +1608,7 @@ fn normalize_rtf(path: &Path) -> Result<NormalizedSource, String> {
     Ok(NormalizedSource {
         text: rtf_to_text(&bytes),
         source_kind: "rtf".into(),
+        ocr_used: false,
         warnings: Vec::new(),
         processed_files: vec![path.to_path_buf()],
         layout_items: Vec::new(),
@@ -1620,6 +1630,7 @@ fn normalize_plain_text(path: &Path, extension: &str) -> Result<NormalizedSource
     Ok(NormalizedSource {
         text: normalized,
         source_kind: extension.into(),
+        ocr_used: false,
         warnings: Vec::new(),
         processed_files: vec![path.to_path_buf()],
         layout_items: Vec::new(),
@@ -1631,6 +1642,7 @@ fn normalize_html(path: &Path) -> Result<NormalizedSource, String> {
     Ok(NormalizedSource {
         text: html_to_text(&decode_text_bytes(&bytes)),
         source_kind: "html".into(),
+        ocr_used: false,
         warnings: Vec::new(),
         processed_files: vec![path.to_path_buf()],
         layout_items: Vec::new(),
@@ -1642,6 +1654,7 @@ fn normalize_eml(path: &Path, workspace: &Path, depth: usize) -> Result<Normaliz
     let mut text = String::new();
     let mut warnings = Vec::new();
     let mut attachment_layout = Vec::new();
+    let mut ocr_used = false;
     let (headers, body) = split_headers_body(&raw);
     for header in ["From", "To", "Cc", "Date", "Subject"] {
         if let Some(value) = header_value(headers, header) {
@@ -1673,6 +1686,7 @@ fn normalize_eml(path: &Path, workspace: &Path, depth: usize) -> Result<Normaliz
                     match normalize_path(&attachment, workspace, depth + 1) {
                         Ok(nested) => {
                             text.push_str(&format!("\n[Вложение: {name}]\n{}\n", nested.text));
+                            ocr_used |= nested.ocr_used;
                             let mut nested_layout = nested.layout_items;
                             archive::prefix_layout_source(
                                 &mut nested_layout,
@@ -1706,6 +1720,7 @@ fn normalize_eml(path: &Path, workspace: &Path, depth: usize) -> Result<Normaliz
     Ok(NormalizedSource {
         text,
         source_kind: "email".into(),
+        ocr_used,
         warnings,
         processed_files: vec![path.to_path_buf()],
         layout_items,

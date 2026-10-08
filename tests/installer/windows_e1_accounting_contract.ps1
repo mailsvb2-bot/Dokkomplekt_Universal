@@ -1164,19 +1164,36 @@ function Set-E1TemplateDomainOverride {
   $groupName = "Профиль для $FileName"
   $group = Find-E1NamedElement -Name $groupName
   if ($null -eq $group) {
+    # A native HTML <details>/<summary> is a TOGGLE, not an idempotent command.
+    # WebView2 UIA Invoke/coordinate click may be acknowledged without opening
+    # it on hosted Windows; multiple blind retries can close it again.
+    # A single focused Space is the proven installed-user action. Only the
+    # visible, file-specific domain choice group can prove that it opened.
     try {
-      $group = Invoke-UiActionWithObservedTransition `
-        -Description "open advanced template settings for $FileName" `
-        -TransitionDescription "domain choices for $FileName" `
-        -TransitionSeconds 5 `
-        -ActionProbe {
-          Find-E1NamedElement -Name 'Необязательно: настроить автоматическое заполнение'
-        } `
-        -TransitionProbe {
+      $summary = Wait-UiElement -Description "open advanced template settings for $FileName" -TimeoutSeconds 25 -Probe {
+        Find-E1NamedElement -Name 'Необязательно: настроить автоматическое заполнение'
+      }
+      $process.Refresh()
+      if ($process.HasExited) { throw "Installed app exited before domain setup for $FileName (exit=$($process.ExitCode))." }
+      $windowHandle = [IntPtr]$process.MainWindowHandle
+      if ($windowHandle -eq [IntPtr]::Zero) { throw "Installed app has no live window for $FileName." }
+      [void][DokkomplektE1NativeMouse]::ShowWindow($windowHandle, 5)
+      [void][DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)
+      $summary.SetFocus()
+      Start-Sleep -Milliseconds 120
+      # If another user/UI event opened the group, never toggle it closed.
+      $group = Find-E1NamedElement -Name $groupName
+      if ($null -eq $group) {
+        [System.Windows.Forms.SendKeys]::SendWait(' ')
+        $group = Wait-UiElement -Description "domain choices for $FileName" -TimeoutSeconds 30 -Probe {
           Find-E1NamedElement -Name $groupName
         }
+      }
+      Write-Host "E1 advanced domain settings OPEN confirmed for $FileName."
     } catch {
-      Write-Host ("E1 UI snapshot after failed advanced settings transition for '$FileName': " + (Get-E1UiSnapshot))
+      $process.Refresh()
+      $processState = if ($process.HasExited) { "exited=$($process.ExitCode)" } else { 'running' }
+      Write-Host "E1 domain settings failure: process=$processState, file=$FileName; " + (Get-E1UiSnapshot)
       throw
     }
   }

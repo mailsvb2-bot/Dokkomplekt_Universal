@@ -27,6 +27,12 @@ pub(crate) fn elapsed_milliseconds(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+pub(crate) fn automatic_source_uses_ocr(
+    normalized: &crate::universal_intake::NormalizedSource,
+) -> bool {
+    normalized.ocr_used
+}
+
 pub(crate) fn automatic_source_uses_pdf(
     normalized: &crate::universal_intake::NormalizedSource,
 ) -> bool {
@@ -315,6 +321,40 @@ pub(crate) fn cleanup_performance_traces(app: &tauri::AppHandle) -> Result<usize
 #[cfg(test)]
 mod performance_e6_provenance_tests {
     use super::*;
+
+    #[test]
+    fn automatic_ocr_provenance_uses_canonical_source_kind_only() {
+        let make =
+            |source_kind: &str, warnings: Vec<String>| crate::universal_intake::NormalizedSource {
+                text: "fixture".into(),
+                source_kind: source_kind.into(),
+                ocr_used: matches!(
+                    source_kind,
+                    "scanned_image" | "scanned_pdf_ocr" | "mixed_pdf_page_ocr"
+                ),
+                warnings,
+                processed_files: vec![PathBuf::from("fixture.txt")],
+                layout_items: Vec::new(),
+            };
+
+        for source_kind in ["scanned_image", "scanned_pdf_ocr", "mixed_pdf_page_ocr"] {
+            assert!(automatic_source_uses_ocr(&make(source_kind, Vec::new())));
+        }
+        assert!(!automatic_source_uses_ocr(&make(
+            "pdf_text",
+            vec!["OCR is mentioned in an unrelated warning".into()],
+        )));
+        let nested_container = crate::universal_intake::NormalizedSource {
+            text: "fixture".into(),
+            source_kind: "archive".into(),
+            ocr_used: true,
+            warnings: Vec::new(),
+            processed_files: vec![PathBuf::from("fixture.zip")],
+            layout_items: Vec::new(),
+        };
+        assert!(automatic_source_uses_ocr(&nested_container));
+        assert!(!automatic_source_uses_ocr(&make("word", Vec::new())));
+    }
 
     #[test]
     fn ordinary_automatic_runtime_does_not_claim_benchmark_cache_or_phase() {

@@ -189,7 +189,7 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert mail_merge.count("recover_unverified_batch_publication(") == 2
     assert "u32::try_from(files.len()).unwrap_or(u32::MAX)" in mail_merge
     assert automation.count("recover_unverified_batch_publication(") == 1
-    assert "u32::try_from(names.len()).unwrap_or(u32::MAX)" in automation
+    assert "u32::try_from(names.len()).unwrap_or(u32::MAX)" not in automatic_success
 
 
     assert "persist_automatic_trace" in runtime
@@ -211,6 +211,13 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
         assert stage in automatic_success
     assert "PerformanceStage::ReferenceClone" not in automatic_success
     assert "persist_automatic_trace" in automatic_success
+    automatic_trace = runtime[
+        runtime.index("pub(crate) fn persist_automatic_trace"):
+        runtime.index("pub(crate) fn persist_failed_recovery_trace")
+    ]
+    assert "workload: PerformanceWorkload::SingleDocument" in automatic_trace
+    assert "batch_size: 1" in automatic_trace
+    assert "performance_workload(batch_size)" not in automatic_trace
     assert "performance_trace_write_failures" in automatic_success
     assert "performance_ocr_used" in automatic_success
     assert "performance_pdf_used" in automatic_success

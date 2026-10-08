@@ -89,7 +89,7 @@ def proof(tmp_path: Path, source_sha256: str) -> Path:
         "producer": probe.PRODUCER,
         "claim": probe.CLAIM,
         "proof_id": "layout-proof-001",
-        "installed_app_sha256": "a" * 64,
+        "application_sha256": "a" * 64,
         "app_version": "18.4.7",
         "source_sha256": source_sha256,
         "pdf_sha256": "b" * 64,

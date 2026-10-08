@@ -151,7 +151,6 @@ pub(crate) struct AutomaticPerformanceTraceContext<'a> {
 
 pub(crate) fn persist_automatic_trace(
     app: &tauri::AppHandle,
-    batch_size: u32,
     stages: Vec<PerformanceStageMeasurement>,
     end_to_end_ms: u64,
     context: AutomaticPerformanceTraceContext<'_>,
@@ -164,8 +163,10 @@ pub(crate) fn persist_automatic_trace(
             class: PerformanceClass::Unclassified,
             cache_state: automatic_runtime_cache_state(),
             run_phase: automatic_runtime_run_phase(),
-            workload: performance_workload(batch_size),
-            batch_size,
+            // One automatic intake invocation owns exactly one source/case.
+            // The number of generated output documents is not an E6 batch size.
+            workload: PerformanceWorkload::SingleDocument,
+            batch_size: 1,
             ocr_used: context.ocr_used,
             // Automatic template replay uses the existing user template layout.
             // Runtime-layout synthesis is a different path and is not invoked here.

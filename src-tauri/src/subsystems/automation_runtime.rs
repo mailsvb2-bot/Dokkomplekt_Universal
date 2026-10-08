@@ -1814,10 +1814,8 @@ fn perform_created_documents_intake(
             };
             let elapsed_milliseconds =
                 crate::performance_trace_runtime::elapsed_milliseconds(intake_started);
-            let automatic_batch_size = u32::try_from(names.len()).unwrap_or(u32::MAX);
             if crate::performance_trace_runtime::persist_automatic_trace(
                 app,
-                automatic_batch_size,
                 performance_stages,
                 elapsed_milliseconds,
                 crate::performance_trace_runtime::AutomaticPerformanceTraceContext {

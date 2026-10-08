@@ -85,6 +85,8 @@ def test_new_template_publication_has_capability_manifest_gate() -> None:
     assert "pub struct DocxCapabilityManifest" in docx
     assert "pub fn inspect_docx_capabilities_file(" in docx
     assert "pub runtime_layout_required: bool" in docx
+    assert "#[serde(default)]\n    pub runtime_layout_required: bool" in docx
+    assert "capability_manifest_reads_legacy_v1_without_runtime_layout_flag" in docx
     assert "pub fn publication_blocking_issues(&self)" in docx
     assert '"runtime_layout_check_required"' in docx
     assert '"custom_xml_requires_explicit_sanitization_policy"' in docx

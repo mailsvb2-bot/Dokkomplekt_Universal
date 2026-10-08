@@ -561,6 +561,7 @@ pub struct DocxCapabilityManifest {
     pub blocking_issues: Vec<String>,
     /// True when page-sensitive constructs require a real runtime layout-engine check.
     /// This records a dependency; it is deliberately distinct from layout_verified.
+    #[serde(default)]
     pub runtime_layout_required: bool,
     pub layout_verified: bool,
 }
@@ -4945,6 +4946,24 @@ mod tests {
         assert!(!manifest.runtime_layout_required);
         assert!(!manifest.layout_verified);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capability_manifest_reads_legacy_v1_without_runtime_layout_flag() {
+        let legacy_v1 = serde_json::json!({
+            "schema_version": 1,
+            "reader_version": "18.4.7",
+            "mutator_version": "18.4.7",
+            "verifier_version": "18.4.7",
+            "required_levels": ["read", "preserve"],
+            "detected_constructs": [],
+            "blocking_issues": [],
+            "layout_verified": false
+        });
+        let manifest: DocxCapabilityManifest =
+            serde_json::from_value(legacy_v1).expect("read v1 manifest from old workspace");
+        assert!(!manifest.runtime_layout_required);
+        assert!(manifest.publishable());
     }
 
     #[test]

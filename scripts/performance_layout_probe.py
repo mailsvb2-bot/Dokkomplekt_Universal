@@ -293,7 +293,7 @@ def build_proof(
             raise ValueError("installed application did not produce layout evidence and PDF")
         evidence = _load(app_evidence)
         required = {
-            "schema", "action", "source_sha256", "pdf_sha256",
+            "schema", "action", "app_version", "source_sha256", "pdf_sha256",
             "pdf_signature_valid", "converter", "converter_sha256",
             "converter_version", "conversion_duration_ms",
         }

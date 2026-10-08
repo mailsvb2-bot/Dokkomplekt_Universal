@@ -115,6 +115,9 @@ def _verify_corpus(spec_path: Path, corpus_dir: Path) -> tuple[dict[str, list[st
 
 def _load_special_sources(path: Path, artifacts_dir: Path) -> dict[str, list[str]]:
     document = _load(path)
+    resolved_artifacts_dir = artifacts_dir.resolve(strict=True)
+    if not resolved_artifacts_dir.is_dir():
+        raise ValueError("special coverage artifacts directory must be a directory")
     if set(document) != {"schema", "sources"}:
         raise ValueError("special coverage source manifest keys must be closed")
     if document.get("schema") != SPECIAL_SOURCES_SCHEMA:
@@ -142,7 +145,12 @@ def _load_special_sources(path: Path, artifacts_dir: Path) -> dict[str, list[str
                     f"special coverage sources {class_name}[{index}].relative_path must be non-empty"
                 )
             rel_path = Path(relative)
-            if rel_path.is_absolute() or ".." in rel_path.parts:
+            windows_rooted = (
+                relative.startswith("\\")
+                or relative.startswith("/")
+                or (len(relative) >= 2 and relative[1] == ":")
+            )
+            if rel_path.is_absolute() or windows_rooted or ".." in rel_path.parts:
                 raise ValueError(
                     f"special coverage sources {class_name}[{index}].relative_path must remain inside artifacts directory"
                 )
@@ -154,7 +162,19 @@ def _load_special_sources(path: Path, artifacts_dir: Path) -> dict[str, list[str
                 raise ValueError(
                     f"special coverage sources {class_name}[{index}].sha256 must be lowercase SHA-256"
                 )
-            actual_path = artifacts_dir / rel_path
+            candidate_path = resolved_artifacts_dir / rel_path
+            try:
+                actual_path = candidate_path.resolve(strict=True)
+            except OSError as exc:
+                raise ValueError(
+                    f"special coverage source artifact missing: {relative}"
+                ) from exc
+            try:
+                actual_path.relative_to(resolved_artifacts_dir)
+            except ValueError as exc:
+                raise ValueError(
+                    f"special coverage source artifact escapes artifacts directory: {relative}"
+                ) from exc
             if not actual_path.is_file():
                 raise ValueError(f"special coverage source artifact missing: {relative}")
             actual_sha = _sha256(actual_path)

@@ -314,9 +314,10 @@ def _validate_physical_observation(
         raise ValueError(f"{path}: physical sample derivation does not match metric")
 
     class_name = value.get("class")
-    allowed_classes = set(gate.CANONICAL_CORPUS_CLASSES) | set(gate.CANONICAL_SPECIAL_CLASSES)
-    if class_name not in allowed_classes:
-        raise ValueError(f"{path}: non-canonical performance class")
+    if class_name != physical_obs.PHYSICAL_CLASS:
+        raise ValueError(
+            f"{path}: physical/UI observation class must remain unclassified"
+        )
     if value.get("cache_state") not in gate.CANONICAL_CACHE_STATES:
         raise ValueError(f"{path}: non-canonical cache_state")
     if value.get("run_kind") not in gate.CANONICAL_RUN_KINDS:

@@ -187,6 +187,7 @@ def test_reference_policy_rejects_incomplete_environment(tmp_path: Path) -> None
     document = gate.load_object(env_path)
     del document["environment"]["cpu"]
     write_json(env_path, document)
+    special_path, special_dir = special_sources(tmp_path)
     with pytest.raises(ValueError, match="exactly the canonical fields"):
         reference_policy.build_reference(
             targets_path=TARGETS,
@@ -195,7 +196,8 @@ def test_reference_policy_rejects_incomplete_environment(tmp_path: Path) -> None
             environment_path=env_path,
             bindings_path=bindings(tmp_path),
             budgets_path=budgets(tmp_path),
-            special_sources_path=special_sources(tmp_path),
+            special_sources_path=special_path,
+            special_sources_dir=special_dir,
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )
@@ -208,6 +210,7 @@ def test_reference_policy_rejects_duplicate_metric_series_ids(tmp_path: Path) ->
     metrics = list(gate.CANONICAL_METRICS)
     document["metric_bindings"][metrics[1]] = document["metric_bindings"][metrics[0]]
     write_json(bindings_path, document)
+    special_path, special_dir = special_sources(tmp_path)
     with pytest.raises(ValueError, match="must be distinct"):
         reference_policy.build_reference(
             targets_path=TARGETS,
@@ -216,7 +219,8 @@ def test_reference_policy_rejects_duplicate_metric_series_ids(tmp_path: Path) ->
             environment_path=environment(tmp_path),
             bindings_path=bindings_path,
             budgets_path=budgets(tmp_path),
-            special_sources_path=special_sources(tmp_path),
+            special_sources_path=special_path,
+            special_sources_dir=special_dir,
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )

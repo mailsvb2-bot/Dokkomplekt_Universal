@@ -241,7 +241,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-01 main-document batch'" in source
     assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-02 diary proof'" in source
     assert '-Description "open advanced template settings for $FileName"' in source
-    assert "after failed advanced settings transition" in source
+    assert 'E1 domain settings failure: process=$processState, file=$FileName' in source
+    assert 'Get-E1UiSnapshot' in source
+    assert 'E1 advanced domain settings OPEN confirmed' in source
     assert "[Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields" in source
     assert "function Add-E1DomainTemplate" in source
     assert "-TemplatePath $accountingTemplate" in source

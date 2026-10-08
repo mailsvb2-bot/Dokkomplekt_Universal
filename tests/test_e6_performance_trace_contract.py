@@ -222,7 +222,7 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "source_reference" in pdf_detector
     assert "ends_with(\".pdf\")" in pdf_detector
     assert "processed_files" in pdf_detector
-    assert "req.resume_from_case_id.is_some() || reused_documents > 0" in automatic_success
+    assert "req.resume_from_case_id.is_some() || reused_documents > 0" not in automatic_success
     assert automatic_success.index("PerformanceStage::SourceOpen") < automatic_success.index(
         "PerformanceStage::SourceParse"
     )
@@ -253,8 +253,9 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
         runtime.index("pub(crate) fn persist_failed_recovery_trace")
     ]
     assert "PerformanceOutcome::Completed" in automatic_trace
-    assert "PerformanceRunPhase::RepeatRun" in automatic_trace
-    assert "PerformanceRunPhase::FirstRun" in automatic_trace
+    assert "automatic_runtime_run_phase()" in automatic_trace
+    assert "PerformanceRunPhase::RepeatRun" not in automatic_trace
+    assert "PerformanceRunPhase::FirstRun" not in automatic_trace
     assert "runtime_layout_used: false" in automatic_trace
     assert "source_sha256" in automatic_trace
     for forbidden in (

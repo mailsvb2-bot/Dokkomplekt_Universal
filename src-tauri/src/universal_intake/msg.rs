@@ -135,6 +135,7 @@ fn normalize_attachments(
     text: &mut String,
     warnings: &mut Vec<String>,
     layout_items: &mut Vec<NormalizedLayoutItem>,
+    ocr_used: &mut bool,
 ) -> Result<(), String> {
     if message.attachments.len() > MAX_ARCHIVE_ENTRIES {
         return Err(format!(
@@ -183,6 +184,7 @@ fn normalize_attachments(
             }
             match normalize_path(&attachment_path, workspace, depth + 1) {
                 Ok(nested) => {
+                    *ocr_used |= nested.ocr_used;
                     if !text.is_empty() {
                         text.push_str("\n\n");
                     }
@@ -225,6 +227,7 @@ pub(super) fn normalize_msg(
         .map(|name| format!("email:{name}"));
     let mut layout_items = layout_items_from_text(&text, None, source_reference);
     let mut warnings = Vec::new();
+    let mut ocr_used = false;
     normalize_attachments(
         &message,
         workspace,
@@ -232,6 +235,7 @@ pub(super) fn normalize_msg(
         &mut text,
         &mut warnings,
         &mut layout_items,
+        &mut ocr_used,
     )?;
     if text.trim().is_empty() {
         return Err(
@@ -241,6 +245,7 @@ pub(super) fn normalize_msg(
     Ok(NormalizedSource {
         text,
         source_kind: "email".into(),
+        ocr_used,
         warnings,
         processed_files: vec![path.to_path_buf()],
         layout_items,

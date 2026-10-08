@@ -397,12 +397,14 @@ fn normalize_extracted_files(
     let mut warnings = Vec::new();
     let mut processed_files = vec![archive_path.to_path_buf()];
     let mut layout_items = Vec::new();
+    let mut ocr_used = false;
     for item in extracted
         .into_iter()
         .filter(|item| is_supported_path(item) && !is_temporary_source(item))
     {
         match normalize_path(&item, workspace, depth + 1) {
             Ok(nested) => {
+                ocr_used |= nested.ocr_used;
                 if !text.is_empty() {
                     text.push_str("\n\n");
                 }
@@ -422,6 +424,7 @@ fn normalize_extracted_files(
     Ok(NormalizedSource {
         text,
         source_kind: "archive".into(),
+        ocr_used,
         warnings,
         processed_files,
         layout_items,

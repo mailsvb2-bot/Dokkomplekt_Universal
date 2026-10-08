@@ -44,13 +44,20 @@ def _sha256_and_count(path: Path, *, throttle_bytes_per_sec: int | None = None) 
     return digest.hexdigest(), total, elapsed
 
 
+def _unc_root(raw: str) -> str:
+    if not raw.startswith("\\\\"):
+        raise ValueError("network_storage probe requires a UNC source path")
+    parts = raw[2:].split("\\")
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        raise ValueError("network_storage UNC source must include server and share")
+    return f"\\\\{parts[0]}\\{parts[1]}\\"
+
+
 def _network_probe(path: Path) -> dict[str, Any]:
     raw = str(path)
     if os.name != "nt":
         raise ValueError("network_storage probe requires Windows")
-    if not raw.startswith("\\\\"):
-        raise ValueError("network_storage probe requires a UNC source path")
-    root = "\\\\" + raw.lstrip("\\").split("\\", 2)[0] + "\\" + raw.lstrip("\\").split("\\", 2)[1] + "\\"
+    root = _unc_root(raw)
     drive_type = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
     if drive_type != DRIVE_REMOTE:
         raise ValueError("UNC source is not reported as DRIVE_REMOTE")

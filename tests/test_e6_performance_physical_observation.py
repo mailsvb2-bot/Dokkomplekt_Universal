@@ -68,7 +68,7 @@ def startup_plan(tmp_path: Path) -> Path:
             "corpus_id": "performance-corpus-physical-01",
             "series_id": "series-cold_start_to_interactive_ui",
             "metric": "cold_start_to_interactive_ui",
-            "class": "typical_docx",
+            "class": "unclassified",
             "cache_state": "cold_cache",
             "run_kind": "first_run",
             "conditions": {"installed_configuration": True},
@@ -250,4 +250,21 @@ def test_assembler_rejects_reused_physical_measurement(tmp_path: Path) -> None:
             tmp_path / "observations",
             protocol(tmp_path),
             resources(tmp_path, reference_path),
+        )
+
+
+
+def test_physical_ui_plan_cannot_claim_special_class_coverage(tmp_path: Path) -> None:
+    reference_path = reference(tmp_path)
+    plan_path = startup_plan(tmp_path)
+    plan = gate.load_object(plan_path)
+    plan["class"] = "runtime_layout"
+    write_json(plan_path, plan)
+
+    with pytest.raises(ValueError, match="must be unclassified"):
+        physical.build_observation(
+            TARGETS,
+            reference_path,
+            plan_path,
+            startup_measurement(tmp_path),
         )

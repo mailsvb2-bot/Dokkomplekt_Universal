@@ -113,19 +113,19 @@ class PerformanceSloContractTests(unittest.TestCase):
                 "complexity": complexity,
             },
             "cold_start_to_interactive_ui": {
-                "class": "small_docx",
+                "class": "unclassified",
                 "cache_state": "cold_cache",
                 "run_kind": "first_run",
                 "conditions": {"installed_configuration": True},
             },
             "visible_action_response": {
-                "class": "small_docx",
+                "class": "unclassified",
                 "cache_state": "warm_cache",
                 "run_kind": "repeat_run",
                 "conditions": {"long_work_backend": True},
             },
             "prompt_form_ready": {
-                "class": "small_docx",
+                "class": "unclassified",
                 "cache_state": "warm_cache",
                 "run_kind": "repeat_run",
                 "conditions": {"prompt_plan_precalculated": True},
@@ -458,6 +458,42 @@ class PerformanceSloContractTests(unittest.TestCase):
                 verdict["errors"],
             )
 
+
+
+
+    def test_unclassified_physical_series_does_not_satisfy_class_coverage(self) -> None:
+        targets = gate.load_object(TARGETS)
+        reference = self._reference(targets)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            reference_path = tmp_path / "reference.json"
+            self._write_json(reference_path, reference)
+            evidence = self._evidence(TARGETS, reference_path, reference)
+            runtime_layout = next(
+                item
+                for item in evidence["series"]  # type: ignore[index]
+                if item["class"] == "runtime_layout"
+            )
+            evidence["series"].remove(runtime_layout)  # type: ignore[index]
+            physical = next(
+                item
+                for item in evidence["series"]  # type: ignore[index]
+                if item["id"] == "series-visible_action_response"
+            )
+            physical["class"] = "unclassified"
+            evidence_path = tmp_path / "missing-runtime-layout.json"
+            self._write_json(evidence_path, evidence)
+
+            verdict = gate.evaluate(TARGETS, reference_path, evidence_path)
+            self.assertEqual(verdict["result"], "FAIL")
+            self.assertTrue(
+                any(
+                    "measured corpus/class coverage is incomplete" in error
+                    and "runtime_layout" in error
+                    for error in verdict["errors"]
+                ),
+                verdict["errors"],
+            )
 
 if __name__ == "__main__":
     unittest.main()

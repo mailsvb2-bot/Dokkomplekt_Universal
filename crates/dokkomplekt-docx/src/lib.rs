@@ -561,13 +561,29 @@ pub struct DocxCapabilityManifest {
     pub blocking_issues: Vec<String>,
     /// True when page-sensitive constructs require a real runtime layout-engine check.
     /// This records a dependency; it is deliberately distinct from layout_verified.
+    #[serde(default)]
     pub runtime_layout_required: bool,
     pub layout_verified: bool,
 }
 
 impl DocxCapabilityManifest {
+    pub fn publication_blocking_issues(&self) -> Vec<String> {
+        let mut issues = self.blocking_issues.clone();
+        if self.runtime_layout_required
+            && !self.layout_verified
+            && !issues
+                .iter()
+                .any(|issue| issue == "runtime_layout_check_required")
+        {
+            issues.push("runtime_layout_check_required".into());
+        }
+        issues.sort();
+        issues.dedup();
+        issues
+    }
+
     pub fn publishable(&self) -> bool {
-        self.blocking_issues.is_empty()
+        self.publication_blocking_issues().is_empty()
     }
 }
 
@@ -4933,6 +4949,24 @@ mod tests {
     }
 
     #[test]
+    fn capability_manifest_reads_legacy_v1_without_runtime_layout_flag() {
+        let legacy_v1 = serde_json::json!({
+            "schema_version": 1,
+            "reader_version": "18.4.7",
+            "mutator_version": "18.4.7",
+            "verifier_version": "18.4.7",
+            "required_levels": ["read", "preserve"],
+            "detected_constructs": [],
+            "blocking_issues": [],
+            "layout_verified": false
+        });
+        let manifest: DocxCapabilityManifest =
+            serde_json::from_value(legacy_v1).expect("read v1 manifest from old workspace");
+        assert!(!manifest.runtime_layout_required);
+        assert!(manifest.publishable());
+    }
+
+    #[test]
     fn capability_manifest_requires_runtime_layout_for_anchored_text_box() {
         let dir = std::env::temp_dir().join("dokkomplekt-capability-runtime-layout-test");
         let path = dir.join("anchored-text-box.docx");
@@ -4945,7 +4979,11 @@ mod tests {
 
         let manifest =
             inspect_docx_capabilities_file(&path).expect("inspect runtime layout capability");
-        assert!(manifest.publishable());
+        assert!(!manifest.publishable());
+        assert_eq!(
+            manifest.publication_blocking_issues(),
+            vec!["runtime_layout_check_required".to_string()]
+        );
         assert_eq!(manifest.schema_version, 2);
         assert!(manifest.runtime_layout_required);
         assert!(manifest

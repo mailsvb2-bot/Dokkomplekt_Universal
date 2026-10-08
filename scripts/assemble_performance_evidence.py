@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from scripts import performance_benchmark_harness as benchmark_harness
+from scripts import performance_layout_observation as layout_obs
+from scripts import performance_layout_probe as layout_probe
 from scripts import performance_physical_observation as physical_obs
 from scripts import performance_slo_gate as gate
 from scripts import performance_storage_observation as storage_obs
@@ -41,6 +43,16 @@ STORAGE_OBSERVATION_KEYS = {
     "measurement_app_version", "measurement_kind", "measurement_instrument",
     "installed_build", "source_sha256", "storage_class", "probe_sha256",
     "probe_producer", "probe_verification",
+}
+LAYOUT_OBSERVATION_KEYS = {
+    "schema", "claim", "targets_sha256", "reference_policy_sha256",
+    "measurement_plan_sha256", "layout_proof_sha256", "reference_id", "corpus_id",
+    "series_id", "metric", "class", "cache_state", "run_kind", "conditions",
+    "complexity", "warmup", "sample_ms", "sample_derivation", "proof_id",
+    "measurement_app_version", "installed_app_sha256", "source_sha256",
+    "pdf_sha256", "converter_sha256", "converter_version", "font_set_sha256",
+    "visual_baseline_sha256", "layout_os", "layout_settings", "installed_build",
+    "visual_verdict",
 }
 PHYSICAL_OBSERVATION_KEYS = {
     "schema", "claim", "targets_sha256", "reference_policy_sha256",
@@ -277,6 +289,91 @@ def _validate_trace_observation(
     return value
 
 
+def _validate_layout_observation(
+    path: Path,
+    *,
+    targets_sha256: str,
+    reference_sha256: str,
+    reference: dict[str, Any],
+) -> dict[str, Any]:
+    value = _load(path)
+    if set(value) != LAYOUT_OBSERVATION_KEYS:
+        raise ValueError(f"{path}: layout observation keys must be closed")
+    if value.get("schema") != layout_obs.OBSERVATION_SCHEMA:
+        raise ValueError(f"{path}: unsupported layout observation schema")
+    if value.get("claim") != layout_obs.OBSERVATION_CLAIM:
+        raise ValueError(f"{path}: layout observation claim is invalid")
+    if value.get("targets_sha256") != targets_sha256:
+        raise ValueError(f"{path}: target hash mismatch")
+    if value.get("reference_policy_sha256") != reference_sha256:
+        raise ValueError(f"{path}: reference hash mismatch")
+    if value.get("reference_id") != reference.get("reference_id"):
+        raise ValueError(f"{path}: reference_id mismatch")
+    if value.get("corpus_id") != reference.get("corpus_id"):
+        raise ValueError(f"{path}: corpus_id mismatch")
+    if value.get("class") != layout_obs.CLASS_NAME:
+        raise ValueError(f"{path}: layout observation class must be runtime_layout")
+    if value.get("metric") != "button_to_ready":
+        raise ValueError(f"{path}: runtime_layout observation metric must be button_to_ready")
+    bindings = reference.get("metric_bindings")
+    if not isinstance(bindings, dict):
+        raise ValueError(f"{path}: reference metric_bindings must be an object")
+    if bindings.get(value["metric"]) == value.get("series_id"):
+        raise ValueError(f"{path}: runtime_layout coverage series must remain non-bound")
+    if value.get("cache_state") not in gate.CANONICAL_CACHE_STATES:
+        raise ValueError(f"{path}: non-canonical cache_state")
+    if value.get("run_kind") not in gate.CANONICAL_RUN_KINDS:
+        raise ValueError(f"{path}: non-canonical run_kind")
+    if not isinstance(value.get("conditions"), dict):
+        raise ValueError(f"{path}: conditions must be an object")
+    if value.get("complexity") is not None:
+        raise ValueError(f"{path}: runtime_layout complexity must be null")
+    if not isinstance(value.get("warmup"), bool):
+        raise ValueError(f"{path}: warmup must be boolean")
+    _nonnegative_number(value.get("sample_ms"), f"{path}: sample_ms")
+    if value.get("sample_derivation") != layout_obs.SAMPLE_DERIVATION:
+        raise ValueError(f"{path}: runtime_layout sample derivation is invalid")
+    for key in (
+        "measurement_plan_sha256", "layout_proof_sha256", "installed_app_sha256",
+        "source_sha256", "pdf_sha256", "converter_sha256", "font_set_sha256",
+        "visual_baseline_sha256",
+    ):
+        if not _is_sha256(value.get(key)):
+            raise ValueError(f"{path}: {key} must be lowercase SHA-256")
+    environment = reference.get("environment")
+    if (
+        not isinstance(environment, dict)
+        or value.get("measurement_app_version") != environment.get("app_version")
+    ):
+        raise ValueError(f"{path}: layout app version differs from bound reference")
+    coverage_sources = reference.get("coverage_sources")
+    allowed_sources = (
+        coverage_sources.get(layout_obs.CLASS_NAME)
+        if isinstance(coverage_sources, dict)
+        else None
+    )
+    if (
+        not isinstance(allowed_sources, list)
+        or value.get("source_sha256") not in allowed_sources
+    ):
+        raise ValueError(f"{path}: runtime_layout source is not predeclared")
+    if value.get("installed_build") is not True:
+        raise ValueError(f"{path}: runtime_layout observation requires installed build")
+    if value.get("visual_verdict") != "pass":
+        raise ValueError(f"{path}: runtime_layout visual verdict must be pass")
+    if not isinstance(value.get("converter_version"), str) or not value["converter_version"].strip():
+        raise ValueError(f"{path}: converter_version must be non-empty")
+    if not isinstance(value.get("layout_os"), str) or not value["layout_os"].strip():
+        raise ValueError(f"{path}: layout_os must be non-empty")
+    settings = value.get("layout_settings")
+    if not isinstance(settings, dict) or set(settings) != {"dpi", "dhash_size", "tolerance"}:
+        raise ValueError(f"{path}: layout_settings must be closed")
+    proof_id = value.get("proof_id")
+    if not isinstance(proof_id, str) or not proof_id:
+        raise ValueError(f"{path}: proof_id must be non-empty")
+    return value
+
+
 def _validate_physical_observation(
     path: Path,
     *,
@@ -499,6 +596,13 @@ def _validate_observation(
             reference_sha256=reference_sha256,
             reference=reference,
         )
+    if schema == layout_obs.OBSERVATION_SCHEMA:
+        return _validate_layout_observation(
+            path,
+            targets_sha256=targets_sha256,
+            reference_sha256=reference_sha256,
+            reference=reference,
+        )
     if schema == physical_obs.OBSERVATION_SCHEMA:
         return _validate_physical_observation(
             path,
@@ -559,6 +663,49 @@ def _validate_benchmark_context_artifact(
         raise ValueError("benchmark context artifact run_phase differs from observation")
 
 
+def _validate_layout_proof_artifact(
+    observation: dict[str, Any],
+    layout_proofs_dir: Path | None,
+) -> None:
+    if layout_proofs_dir is None or not layout_proofs_dir.is_dir():
+        raise ValueError(
+            "runtime_layout observation requires a layout-proofs directory containing the exact LayoutProof"
+        )
+    expected_sha256 = observation["layout_proof_sha256"]
+    matches = [
+        path
+        for path in sorted(layout_proofs_dir.glob("*.json"))
+        if path.is_file() and _sha256(path) == expected_sha256
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"LayoutProof hash {expected_sha256} must resolve to exactly one file"
+        )
+    proof = _load(matches[0])
+    layout_probe.validate_proof(proof)
+    comparisons = {
+        "proof_id": "proof_id",
+        "app_version": "measurement_app_version",
+        "installed_app_sha256": "installed_app_sha256",
+        "source_sha256": "source_sha256",
+        "pdf_sha256": "pdf_sha256",
+        "converter_sha256": "converter_sha256",
+        "converter_version": "converter_version",
+        "font_set_sha256": "font_set_sha256",
+        "visual_baseline_sha256": "visual_baseline_sha256",
+        "os": "layout_os",
+        "settings": "layout_settings",
+        "verdict": "visual_verdict",
+    }
+    for proof_key, observation_key in comparisons.items():
+        if proof.get(proof_key) != observation.get(observation_key):
+            raise ValueError(
+                f"LayoutProof {proof_key} differs from runtime_layout observation"
+            )
+    if float(proof.get("layout_check_duration_ms")) != float(observation.get("sample_ms")):
+        raise ValueError("LayoutProof duration differs from runtime_layout observation")
+
+
 def _validate_storage_probe_artifact(
     observation: dict[str, Any],
     storage_probes_dir: Path | None,
@@ -609,6 +756,7 @@ def build_evidence(
     resources_path: Path,
     storage_probes_dir: Path | None = None,
     benchmark_contexts_dir: Path | None = None,
+    layout_proofs_dir: Path | None = None,
 ) -> dict[str, Any]:
     targets = gate.load_object(targets_path)
     target_errors = gate.validate_targets(targets)
@@ -672,6 +820,27 @@ def build_evidence(
                 ]
             if observation.get("trace_source_sha256") is not None:
                 manifest_entry["trace_source_sha256"] = observation["trace_source_sha256"]
+        elif observation["schema"] == layout_obs.OBSERVATION_SCHEMA:
+            _validate_layout_proof_artifact(observation, layout_proofs_dir)
+            proof_hash = observation["layout_proof_sha256"]
+            proof_id = observation["proof_id"]
+            if proof_hash in used_measurement_hashes:
+                raise ValueError(
+                    f"layout_proof_sha256 reused by multiple observations: {proof_hash}"
+                )
+            if proof_id in used_measurement_ids:
+                raise ValueError(
+                    f"proof_id reused by multiple observations: {proof_id}"
+                )
+            used_measurement_hashes.add(proof_hash)
+            used_measurement_ids.add(proof_id)
+            manifest_entry = {
+                "observation_sha256": _sha256(path),
+                "proof_id": proof_id,
+                "layout_proof_sha256": proof_hash,
+                "measurement_plan_sha256": observation["measurement_plan_sha256"],
+                "source_sha256": observation["source_sha256"],
+            }
         else:
             measurement_hash = observation["measurement_sha256"]
             measurement_id = observation["measurement_id"]
@@ -777,6 +946,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Directory containing exact benchmark lifecycle contexts referenced by trace observations",
     )
+    parser.add_argument(
+        "--layout-proofs",
+        type=Path,
+        help="Directory containing exact LayoutProof artifacts referenced by runtime_layout observations",
+    )
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -788,6 +962,7 @@ def main(argv: list[str] | None = None) -> int:
             args.resources,
             args.storage_probes,
             args.benchmark_contexts,
+            args.layout_proofs,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"PERFORMANCE EVIDENCE ASSEMBLY FAILED: {exc}")

@@ -51,8 +51,7 @@ LAYOUT_OBSERVATION_KEYS = {
     "complexity", "warmup", "sample_ms", "sample_derivation", "proof_id",
     "measurement_app_version", "application_sha256", "source_sha256",
     "pdf_sha256", "converter_sha256", "converter_version", "font_set_sha256",
-    "visual_baseline_sha256", "layout_os", "layout_settings", "installed_build",
-    "visual_verdict",
+    "visual_baseline_sha256", "layout_os", "layout_settings", "visual_verdict",
 }
 PHYSICAL_OBSERVATION_KEYS = {
     "schema", "claim", "targets_sha256", "reference_policy_sha256",

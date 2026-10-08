@@ -5,6 +5,21 @@ SCRIPT = ROOT / "tests" / "installer" / "windows_e1_accounting_contract.ps1"
 WORKFLOW = ROOT / ".github" / "workflows" / "quality-gate.yml"
 
 
+def test_e1_advanced_domain_details_open_via_one_observed_user_action() -> None:
+    source = SCRIPT.read_text(encoding="utf-8-sig")
+    domain_owner = source[
+        source.index("function Set-E1TemplateDomainOverride"):
+        source.index("function Get-E1UiSnapshot")
+    ]
+    open_stage = domain_owner[:domain_owner.index("  $radioName = ")]
+    assert 'SendWait(\' \')' in open_stage
+    assert "Invoke-UiActionWithObservedTransition" not in open_stage
+    assert "domain choices for $FileName" in open_stage
+    assert "Find-E1NamedElement -Name $groupName" in open_stage
+    assert "E1 advanced domain settings OPEN confirmed" in open_stage
+    assert "$process.HasExited" in open_stage
+
+
 def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert SCRIPT.read_bytes().startswith(b"\xef\xbb\xbf"), (
         "Windows PowerShell 5.1 requires UTF-8 BOM for Cyrillic literals in the E1 installed contract"
@@ -226,7 +241,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-01 main-document batch'" in source
     assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-02 diary proof'" in source
     assert '-Description "open advanced template settings for $FileName"' in source
-    assert "after failed advanced settings transition" in source
+    assert 'E1 domain settings failure: process=$processState, file=$FileName' in source
+    assert 'Get-E1UiSnapshot' in source
+    assert 'E1 advanced domain settings OPEN confirmed' in source
     assert "[Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields" in source
     assert "function Add-E1DomainTemplate" in source
     assert "-TemplatePath $accountingTemplate" in source

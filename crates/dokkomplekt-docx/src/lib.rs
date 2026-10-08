@@ -559,6 +559,9 @@ pub struct DocxCapabilityManifest {
     pub required_levels: Vec<DocxCapabilityLevel>,
     pub detected_constructs: Vec<String>,
     pub blocking_issues: Vec<String>,
+    /// True when page-sensitive constructs require a real runtime layout-engine check.
+    /// This records a dependency; it is deliberately distinct from layout_verified.
+    pub runtime_layout_required: bool,
     pub layout_verified: bool,
 }
 
@@ -784,12 +787,41 @@ fn xml_contains_element(xml: &str, element: &str) -> bool {
     false
 }
 
+fn xml_contains_positioned_vml_text_box(xml: &str) -> bool {
+    let lower = xml.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    while let Some(relative) = lower[cursor..].find("<v:shape") {
+        let shape_start = cursor + relative;
+        let Some(tag_end_relative) = lower[shape_start..].find('>') else {
+            return false;
+        };
+        let tag_end = shape_start + tag_end_relative;
+        let opening_tag = lower[shape_start..=tag_end]
+            .chars()
+            .filter(|ch| !ch.is_ascii_whitespace())
+            .collect::<String>();
+        let positioned =
+            opening_tag.contains("position:absolute") || opening_tag.contains("position:relative");
+        let Some(close_relative) = lower[tag_end + 1..].find("</v:shape>") else {
+            cursor = tag_end + 1;
+            continue;
+        };
+        let shape_end = tag_end + 1 + close_relative;
+        if positioned && xml_contains_element(&lower[tag_end + 1..shape_end], "v:textbox") {
+            return true;
+        }
+        cursor = shape_end + "</v:shape>".len();
+    }
+    false
+}
+
 fn inspect_docx_capabilities_archive<R: Read + Seek>(
     mut archive: ZipArchive<R>,
 ) -> DocxResult<DocxCapabilityManifest> {
     let mut required = BTreeSet::from([DocxCapabilityLevel::Read, DocxCapabilityLevel::Preserve]);
     let mut detected = BTreeSet::<String>::new();
     let mut blocking = BTreeSet::<String>::new();
+    let mut runtime_layout_required = false;
     let mut total_uncompressed = 0_u64;
     let mut found_main = false;
 
@@ -842,8 +874,27 @@ fn inspect_docx_capabilities_archive<R: Read + Seek>(
         } else if name == "word/endnotes.xml" {
             detected.insert("endnotes".into());
         }
-        if xml_contains_element(&xml, "w:txbxContent") {
+        let has_text_box =
+            xml_contains_element(&xml, "w:txbxContent") || xml_contains_element(&xml, "v:textbox");
+        let has_anchored_drawing = xml_contains_element(&xml, "wp:anchor");
+        let has_positioned_vml_text_box = xml_contains_positioned_vml_text_box(&xml);
+        if has_text_box {
             detected.insert("text_box".into());
+        }
+        if has_anchored_drawing {
+            detected.insert("anchored_drawing".into());
+        }
+        if has_positioned_vml_text_box {
+            detected.insert("positioned_vml_text_box".into());
+        }
+        // Anchored drawings and positioned text boxes are page-sensitive: line
+        // wrapping, clipping and placement depend on the real font/layout engine.
+        // Record the requirement here; do not claim it has been verified by OOXML
+        // inspection alone.
+        if (has_anchored_drawing && has_text_box) || has_positioned_vml_text_box {
+            runtime_layout_required = true;
+            required.insert(DocxCapabilityLevel::LayoutVerified);
+            detected.insert("runtime_layout_required".into());
         }
         if xml_contains_element(&xml, "w:tbl") {
             detected.insert("table".into());
@@ -875,13 +926,14 @@ fn inspect_docx_capabilities_archive<R: Read + Seek>(
     }
 
     Ok(DocxCapabilityManifest {
-        schema_version: 1,
+        schema_version: 2,
         reader_version: env!("CARGO_PKG_VERSION").into(),
         mutator_version: env!("CARGO_PKG_VERSION").into(),
         verifier_version: env!("CARGO_PKG_VERSION").into(),
         required_levels: required.into_iter().collect(),
         detected_constructs: detected.into_iter().collect(),
         blocking_issues: blocking.into_iter().collect(),
+        runtime_layout_required,
         layout_verified: false,
     })
 }
@@ -4875,6 +4927,60 @@ mod tests {
         assert!(manifest
             .detected_constructs
             .contains(&"template_structural_edit".into()));
+        assert!(!manifest.runtime_layout_required);
+        assert!(!manifest.layout_verified);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capability_manifest_requires_runtime_layout_for_anchored_text_box() {
+        let dir = std::env::temp_dir().join("dokkomplekt-capability-runtime-layout-test");
+        let path = dir.join("anchored-text-box.docx");
+        std::fs::create_dir_all(&dir).expect("create runtime layout capability test dir");
+        let bytes = build_test_docx(&[(
+            "word/document.xml",
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body><w:p><w:r><w:drawing><wp:anchor><w:txbxContent><w:p><w:r><w:t>{{person.name}}</w:t></w:r></w:p></w:txbxContent></wp:anchor></w:drawing></w:r></w:p></w:body></w:document>"#,
+        )]);
+        std::fs::write(&path, bytes).expect("write runtime layout capability fixture");
+
+        let manifest =
+            inspect_docx_capabilities_file(&path).expect("inspect runtime layout capability");
+        assert!(manifest.publishable());
+        assert_eq!(manifest.schema_version, 2);
+        assert!(manifest.runtime_layout_required);
+        assert!(manifest
+            .required_levels
+            .contains(&DocxCapabilityLevel::LayoutVerified));
+        assert!(manifest
+            .detected_constructs
+            .contains(&"anchored_drawing".into()));
+        assert!(manifest
+            .detected_constructs
+            .contains(&"runtime_layout_required".into()));
+        assert!(!manifest.layout_verified);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capability_manifest_requires_runtime_layout_for_positioned_vml_text_box() {
+        let dir = std::env::temp_dir().join("dokkomplekt-capability-vml-layout-test");
+        let path = dir.join("positioned-vml-text-box.docx");
+        std::fs::create_dir_all(&dir).expect("create VML runtime layout test dir");
+        let bytes = build_test_docx(&[(
+            "word/document.xml",
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:pict><v:shape style="position: absolute; width:100pt; height:24pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>{{person.name}}</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#,
+        )]);
+        std::fs::write(&path, bytes).expect("write VML runtime layout fixture");
+
+        let manifest =
+            inspect_docx_capabilities_file(&path).expect("inspect VML runtime layout capability");
+        assert!(manifest.runtime_layout_required);
+        assert!(manifest
+            .required_levels
+            .contains(&DocxCapabilityLevel::LayoutVerified));
+        assert!(manifest
+            .detected_constructs
+            .contains(&"positioned_vml_text_box".into()));
         assert!(!manifest.layout_verified);
         let _ = std::fs::remove_dir_all(&dir);
     }

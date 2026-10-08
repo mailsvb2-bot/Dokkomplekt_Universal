@@ -11,7 +11,7 @@ import argparse
 import hashlib
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from scripts import performance_benchmark_harness as benchmark
@@ -124,6 +124,7 @@ def _load_special_sources(
         raise ValueError("special coverage source manifest schema is invalid")
     if not artifacts_dir.is_dir():
         raise ValueError("special coverage artifacts directory does not exist")
+    artifacts_root = artifacts_dir.resolve(strict=True)
     sources = document.get("sources")
     expected = set(gate.CANONICAL_SPECIAL_CLASSES)
     if not isinstance(sources, dict) or set(sources) != expected:
@@ -152,7 +153,13 @@ def _load_special_sources(
                     "must be non-empty"
                 )
             relative_path = Path(relative)
-            if relative_path.is_absolute() or ".." in relative_path.parts:
+            windows_path = PureWindowsPath(relative)
+            if (
+                relative_path.is_absolute()
+                or windows_path.drive
+                or windows_path.root
+                or ".." in relative_path.parts
+            ):
                 raise ValueError(
                     f"special coverage sources {class_name}[{index}].relative_path "
                     "must remain inside artifacts directory"
@@ -173,12 +180,25 @@ def _load_special_sources(
                     f"special coverage sources {class_name}[{index}].sha256 "
                     "must be lowercase SHA-256"
                 )
-            artifact = artifacts_dir / relative_path
-            if not artifact.is_file():
+            artifact = artifacts_root / relative_path
+            try:
+                resolved_artifact = artifact.resolve(strict=True)
+            except OSError as exc:
+                raise ValueError(
+                    f"special coverage artifact missing: {normalized_relative}"
+                ) from exc
+            try:
+                resolved_artifact.relative_to(artifacts_root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"special coverage artifact escapes artifacts directory: "
+                    f"{normalized_relative}"
+                ) from exc
+            if not resolved_artifact.is_file():
                 raise ValueError(
                     f"special coverage artifact missing: {normalized_relative}"
                 )
-            actual_sha = _sha256(artifact)
+            actual_sha = _sha256(resolved_artifact)
             if actual_sha != expected_sha:
                 raise ValueError(
                     f"special coverage artifact hash mismatch: {normalized_relative}"

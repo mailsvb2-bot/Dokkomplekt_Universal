@@ -507,6 +507,36 @@ def _validate_observation(
     raise ValueError(f"{path}: unsupported observation schema: {schema!r}")
 
 
+def _validate_storage_probe_artifact(
+    observation: dict[str, Any],
+    storage_probes_dir: Path | None,
+) -> None:
+    if storage_probes_dir is None or not storage_probes_dir.is_dir():
+        raise ValueError(
+            "storage observation requires a storage-probes directory containing the exact probe artifact"
+        )
+    expected_sha256 = observation["probe_sha256"]
+    matches = [
+        path
+        for path in sorted(storage_probes_dir.glob("*.json"))
+        if path.is_file() and _sha256(path) == expected_sha256
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"storage probe artifact hash {expected_sha256} must resolve to exactly one file"
+        )
+    probe = _load(matches[0])
+    storage_obs.storage_probe.validate_probe(probe)
+    if probe.get("producer") != observation.get("probe_producer"):
+        raise ValueError("storage probe artifact producer differs from observation")
+    if probe.get("storage_class") != observation.get("storage_class"):
+        raise ValueError("storage probe artifact class differs from observation")
+    if probe.get("source_sha256") != observation.get("source_sha256"):
+        raise ValueError("storage probe artifact source differs from observation")
+    if probe.get("verification") != observation.get("probe_verification"):
+        raise ValueError("storage probe artifact verification differs from observation")
+
+
 def _series_signature(observation: dict[str, Any]) -> tuple[Any, ...]:
     return (
         observation["metric"],
@@ -525,6 +555,7 @@ def build_evidence(
     observations_dir: Path,
     protocol_path: Path,
     resources_path: Path,
+    storage_probes_dir: Path | None = None,
 ) -> dict[str, Any]:
     targets = gate.load_object(targets_path)
     target_errors = gate.validate_targets(targets)
@@ -601,6 +632,7 @@ def build_evidence(
                 "measurement_plan_sha256": observation["measurement_plan_sha256"],
             }
             if observation["schema"] == storage_obs.OBSERVATION_SCHEMA:
+                _validate_storage_probe_artifact(observation, storage_probes_dir)
                 manifest_entry["probe_sha256"] = observation["probe_sha256"]
                 manifest_entry["source_sha256"] = observation["source_sha256"]
 
@@ -675,6 +707,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--observations", required=True, type=Path)
     parser.add_argument("--protocol", required=True, type=Path)
     parser.add_argument("--resources", required=True, type=Path)
+    parser.add_argument(
+        "--storage-probes",
+        type=Path,
+        help="Directory containing exact storage probe artifacts referenced by storage observations",
+    )
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -684,6 +721,7 @@ def main(argv: list[str] | None = None) -> int:
             args.observations,
             args.protocol,
             args.resources,
+            args.storage_probes,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"PERFORMANCE EVIDENCE ASSEMBLY FAILED: {exc}")

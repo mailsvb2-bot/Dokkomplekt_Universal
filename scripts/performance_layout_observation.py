@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind one installed-product LayoutProof to Canon E6 runtime_layout coverage."""
+"""Bind one application-path LayoutProof to Canon E6 runtime_layout coverage."""
 from __future__ import annotations
 
 import argparse
@@ -15,9 +15,9 @@ from scripts import performance_slo_gate as gate
 PLAN_SCHEMA = "dokkomplekt.performance-layout-measurement-plan.v1"
 OBSERVATION_SCHEMA = "dokkomplekt.performance-layout-observation.v1"
 OBSERVATION_CLAIM = "single_sample_runtime_layout_coverage_only_not_slo_verdict"
-MEASUREMENT_KIND = "installed_runtime_layout_visual_check"
+MEASUREMENT_KIND = "application_runtime_layout_visual_check"
 CLASS_NAME = "runtime_layout"
-SAMPLE_DERIVATION = "installed_runtime_layout_check_elapsed"
+SAMPLE_DERIVATION = "application_runtime_layout_check_elapsed"
 
 PLAN_KEYS = {
     "schema", "reference_id", "corpus_id", "series_id", "metric", "class",

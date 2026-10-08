@@ -160,7 +160,7 @@ def build_observation(
         "sample_derivation": SAMPLE_DERIVATION,
         "proof_id": proof["proof_id"],
         "measurement_app_version": proof["app_version"],
-        "installed_app_sha256": proof["installed_app_sha256"],
+        "application_sha256": proof["application_sha256"],
         "source_sha256": proof["source_sha256"],
         "pdf_sha256": proof["pdf_sha256"],
         "converter_sha256": proof["converter_sha256"],
@@ -169,7 +169,6 @@ def build_observation(
         "visual_baseline_sha256": proof["visual_baseline_sha256"],
         "layout_os": proof["os"],
         "layout_settings": proof["settings"],
-        "installed_build": True,
         "visual_verdict": proof["verdict"],
     }
 

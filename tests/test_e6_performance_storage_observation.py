@@ -162,6 +162,13 @@ def resources(tmp_path: Path, reference_path: Path) -> Path:
     )
 
 
+def test_unc_root_requires_server_and_share() -> None:
+    assert probe._unc_root(r"\\\\server\\share\\folder\\file.docx") == "\\\\server\\share\\"
+    for malformed in (r"\\\\server", "\\\\server\\", r"\\\\\\share"):
+        with pytest.raises(ValueError, match="server and share"):
+            probe._unc_root(malformed)
+
+
 def test_slow_probe_performs_controlled_read_and_is_hash_bound(tmp_path: Path) -> None:
     probe_path, source_sha256 = slow_probe(tmp_path)
     document = gate.load_object(probe_path)
@@ -256,6 +263,7 @@ def test_assembler_accepts_storage_coverage_without_binding_slo(tmp_path: Path) 
         tmp_path / "observations",
         protocol(tmp_path),
         resources(tmp_path, reference_path),
+        tmp_path,
     )
     assert evidence["series"][0]["class"] == "slow_storage"
     assert evidence["series"][0]["id"] == "coverage-slow_storage-button"
@@ -265,3 +273,60 @@ def test_assembler_accepts_storage_coverage_without_binding_slo(tmp_path: Path) 
     verdict = gate.evaluate(TARGETS, reference_path, evidence_path)
     assert verdict["result"] == "FAIL"
     assert any("bound series is missing" in error for error in verdict["errors"])
+
+
+def test_assembler_rejects_storage_observation_without_exact_probe_artifact(
+    tmp_path: Path,
+) -> None:
+    probe_path, source_sha256 = slow_probe(tmp_path)
+    reference_path = reference(tmp_path, "slow_storage", source_sha256)
+    observation = storage.build_observation(
+        TARGETS,
+        reference_path,
+        plan(tmp_path, "slow_storage", source_sha256),
+        measurement(tmp_path, "slow_storage", source_sha256),
+        probe_path,
+    )
+    observations_dir = tmp_path / "observations"
+    write_json(observations_dir / "slow.json", observation)
+    probe_path.unlink()
+
+    with pytest.raises(ValueError, match="must resolve to exactly one file"):
+        assemble.build_evidence(
+            TARGETS,
+            reference_path,
+            observations_dir,
+            protocol(tmp_path),
+            resources(tmp_path, reference_path),
+            tmp_path,
+        )
+
+
+def test_assembler_rejects_probe_artifact_that_differs_from_observation(
+    tmp_path: Path,
+) -> None:
+    probe_path, source_sha256 = slow_probe(tmp_path)
+    reference_path = reference(tmp_path, "slow_storage", source_sha256)
+    observation = storage.build_observation(
+        TARGETS,
+        reference_path,
+        plan(tmp_path, "slow_storage", source_sha256),
+        measurement(tmp_path, "slow_storage", source_sha256),
+        probe_path,
+    )
+    observations_dir = tmp_path / "observations"
+    write_json(observations_dir / "slow.json", observation)
+
+    forged = gate.load_object(probe_path)
+    forged["verification"]["configured_bytes_per_sec"] += 1
+    write_json(probe_path, forged)
+
+    with pytest.raises(ValueError, match="must resolve to exactly one file"):
+        assemble.build_evidence(
+            TARGETS,
+            reference_path,
+            observations_dir,
+            protocol(tmp_path),
+            resources(tmp_path, reference_path),
+            tmp_path,
+        )

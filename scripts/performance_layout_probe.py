@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a Canon runtime-layout proof through the installed Dokkomplekt app.
+"""Generate a Canon runtime-layout proof through a Dokkomplekt application binary.
 
 The probe deliberately uses the application's hardware-gated --e2e-export-pdf
 command so DOCX->PDF conversion goes through the production
@@ -404,7 +404,7 @@ def build_proof(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate installed-runtime layout proof")
+    parser = argparse.ArgumentParser(description="Generate application runtime-layout proof")
     parser.add_argument("--app", required=True, type=Path)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument(

@@ -18,6 +18,10 @@ def test_fpr17_installed_pdf_export_uses_production_converter_and_is_hardware_gu
     assert 'verify_pdf_signature(&pdf_evidence_path)' in desktop_io
     assert '"dokkomplekt.fpr17-pdf-export-e2e.v1"' in desktop_io
     assert '"production convert_office_document_to_pdf"' in desktop_io
+    assert '"converter_sha256": converter_sha256' in desktop_io
+    assert '"converter_version": converter_version' in desktop_io
+    assert '"conversion_duration_ms": conversion_duration_ms' in desktop_io
+    assert 'office_converter_identity()' in desktop_io
 
 
 def test_fpr17_hardware_lane_requires_real_pdf_bytes_hash_and_spooler_completion() -> None:

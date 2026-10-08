@@ -20,7 +20,7 @@ from scripts import performance_slo_gate as gate
 ENVIRONMENT_SCHEMA = "dokkomplekt.performance-environment-snapshot.v1"
 BINDINGS_SCHEMA = "dokkomplekt.performance-metric-bindings.v1"
 BUDGETS_SCHEMA = "dokkomplekt.performance-resource-budgets.v1"
-SPECIAL_SOURCES_SCHEMA = "dokkomplekt.performance-special-coverage-sources.v1"
+SPECIAL_SOURCES_SCHEMA = "dokkomplekt.performance-special-coverage-sources.v2"
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -113,39 +113,84 @@ def _verify_corpus(spec_path: Path, corpus_dir: Path) -> tuple[dict[str, list[st
     return coverage, _sha256(manifest_path)
 
 
-def _load_special_sources(path: Path) -> dict[str, list[str]]:
+def _load_special_sources(
+    path: Path,
+    artifacts_dir: Path,
+) -> dict[str, list[str]]:
     document = _load(path)
     if set(document) != {"schema", "sources"}:
         raise ValueError("special coverage source manifest keys must be closed")
     if document.get("schema") != SPECIAL_SOURCES_SCHEMA:
         raise ValueError("special coverage source manifest schema is invalid")
+    if not artifacts_dir.is_dir():
+        raise ValueError("special coverage artifacts directory does not exist")
     sources = document.get("sources")
     expected = set(gate.CANONICAL_SPECIAL_CLASSES)
     if not isinstance(sources, dict) or set(sources) != expected:
-        raise ValueError("special coverage sources must define exactly the canonical special classes")
+        raise ValueError(
+            "special coverage sources must define exactly the canonical special classes"
+        )
     normalized: dict[str, list[str]] = {}
+    globally_seen_paths: set[str] = set()
     for class_name in gate.CANONICAL_SPECIAL_CLASSES:
         values = sources.get(class_name)
         if not isinstance(values, list) or not values:
-            raise ValueError(f"special coverage sources for {class_name} must be non-empty")
-        seen: set[str] = set()
+            raise ValueError(
+                f"special coverage sources for {class_name} must be non-empty"
+            )
+        seen_hashes: set[str] = set()
         normalized_values: list[str] = []
         for index, value in enumerate(values):
+            if not isinstance(value, dict) or set(value) != {"relative_path", "sha256"}:
+                raise ValueError(
+                    f"special coverage sources {class_name}[{index}] keys must be closed"
+                )
+            relative = value.get("relative_path")
+            if not isinstance(relative, str) or not relative:
+                raise ValueError(
+                    f"special coverage sources {class_name}[{index}].relative_path "
+                    "must be non-empty"
+                )
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError(
+                    f"special coverage sources {class_name}[{index}].relative_path "
+                    "must remain inside artifacts directory"
+                )
+            normalized_relative = relative_path.as_posix()
+            if normalized_relative in globally_seen_paths:
+                raise ValueError(
+                    f"duplicate special coverage artifact path: {normalized_relative}"
+                )
+            globally_seen_paths.add(normalized_relative)
+            expected_sha = value.get("sha256")
             if (
-                not isinstance(value, str)
-                or len(value) != 64
-                or any(ch not in "0123456789abcdef" for ch in value)
+                not isinstance(expected_sha, str)
+                or len(expected_sha) != 64
+                or any(ch not in "0123456789abcdef" for ch in expected_sha)
             ):
                 raise ValueError(
-                    f"special coverage sources {class_name}[{index}] must be lowercase SHA-256"
+                    f"special coverage sources {class_name}[{index}].sha256 "
+                    "must be lowercase SHA-256"
                 )
-            if value in seen:
-                raise ValueError(f"duplicate special coverage source for {class_name}: {value}")
-            seen.add(value)
-            normalized_values.append(value)
+            artifact = artifacts_dir / relative_path
+            if not artifact.is_file():
+                raise ValueError(
+                    f"special coverage artifact missing: {normalized_relative}"
+                )
+            actual_sha = _sha256(artifact)
+            if actual_sha != expected_sha:
+                raise ValueError(
+                    f"special coverage artifact hash mismatch: {normalized_relative}"
+                )
+            if actual_sha in seen_hashes:
+                raise ValueError(
+                    f"duplicate special coverage source for {class_name}: {actual_sha}"
+                )
+            seen_hashes.add(actual_sha)
+            normalized_values.append(actual_sha)
         normalized[class_name] = sorted(normalized_values)
     return normalized
-
 
 def build_reference(
     *,
@@ -156,6 +201,7 @@ def build_reference(
     bindings_path: Path,
     budgets_path: Path,
     special_sources_path: Path,
+    special_source_artifacts_dir: Path,
     reference_id: str,
     min_samples_per_series: int,
 ) -> dict[str, Any]:
@@ -172,7 +218,9 @@ def build_reference(
         raise ValueError("min_samples_per_series must be an integer >= 3")
 
     coverage_sources, corpus_manifest_sha256 = _verify_corpus(spec_path, corpus_dir)
-    coverage_sources.update(_load_special_sources(special_sources_path))
+    coverage_sources.update(
+        _load_special_sources(special_sources_path, special_source_artifacts_dir)
+    )
     spec = _load(spec_path)
 
     environment_document = _load(environment_path)
@@ -251,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bindings", required=True, type=Path)
     parser.add_argument("--budgets", required=True, type=Path)
     parser.add_argument("--special-sources", required=True, type=Path)
+    parser.add_argument("--special-source-artifacts", required=True, type=Path)
     parser.add_argument("--reference-id", required=True)
     parser.add_argument("--min-samples", type=int, default=3)
     parser.add_argument("--output", required=True, type=Path)
@@ -264,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
             bindings_path=args.bindings,
             budgets_path=args.budgets,
             special_sources_path=args.special_sources,
+            special_source_artifacts_dir=args.special_source_artifacts,
             reference_id=args.reference_id,
             min_samples_per_series=args.min_samples,
         )

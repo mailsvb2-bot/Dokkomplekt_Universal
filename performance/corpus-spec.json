@@ -1,0 +1,128 @@
+{
+  "schema": "dokkomplekt.performance-corpus-spec.v1",
+  "corpus_id": "dokkomplekt-e6-synthetic-v1",
+  "claim": "deterministic_synthetic_baseline_not_production_measurement",
+  "generator": "performance_benchmark_harness.py",
+  "classes": {
+    "small_docx": {
+      "documents": 1,
+      "paragraphs": 8,
+      "paragraph_bytes": 160,
+      "tables": 0,
+      "rows": 0,
+      "cols": 0,
+      "header_footer": false,
+      "roles": 1
+    },
+    "typical_docx": {
+      "documents": 1,
+      "paragraphs": 120,
+      "paragraph_bytes": 240,
+      "tables": 2,
+      "rows": 8,
+      "cols": 4,
+      "header_footer": true,
+      "roles": 4
+    },
+    "large_docx": {
+      "documents": 1,
+      "paragraphs": 9000,
+      "paragraph_bytes": 1024,
+      "tables": 8,
+      "rows": 40,
+      "cols": 6,
+      "header_footer": true,
+      "roles": 12
+    },
+    "table_heavy": {
+      "documents": 1,
+      "paragraphs": 20,
+      "paragraph_bytes": 120,
+      "tables": 24,
+      "rows": 35,
+      "cols": 8,
+      "header_footer": false,
+      "roles": 3
+    },
+    "header_footer_heavy": {
+      "documents": 1,
+      "paragraphs": 120,
+      "paragraph_bytes": 220,
+      "tables": 2,
+      "rows": 8,
+      "cols": 4,
+      "header_footer": true,
+      "roles": 3
+    },
+    "long_text": {
+      "documents": 1,
+      "paragraphs": 1200,
+      "paragraph_bytes": 700,
+      "tables": 0,
+      "rows": 0,
+      "cols": 0,
+      "header_footer": false,
+      "roles": 2
+    },
+    "repeated_blocks": {
+      "documents": 1,
+      "paragraphs": 500,
+      "paragraph_bytes": 320,
+      "tables": 4,
+      "rows": 12,
+      "cols": 4,
+      "header_footer": false,
+      "roles": 3
+    },
+    "batch_10": {
+      "documents": 10,
+      "paragraphs": 80,
+      "paragraph_bytes": 220,
+      "tables": 1,
+      "rows": 8,
+      "cols": 4,
+      "header_footer": false,
+      "roles": 3
+    },
+    "batch_50": {
+      "documents": 50,
+      "paragraphs": 40,
+      "paragraph_bytes": 180,
+      "tables": 1,
+      "rows": 5,
+      "cols": 3,
+      "header_footer": false,
+      "roles": 2
+    },
+    "accounting_table": {
+      "documents": 1,
+      "paragraphs": 30,
+      "paragraph_bytes": 160,
+      "tables": 12,
+      "rows": 80,
+      "cols": 10,
+      "header_footer": true,
+      "roles": 4
+    },
+    "hr_kit": {
+      "documents": 8,
+      "paragraphs": 100,
+      "paragraph_bytes": 260,
+      "tables": 3,
+      "rows": 12,
+      "cols": 5,
+      "header_footer": true,
+      "roles": 16
+    },
+    "many_roles": {
+      "documents": 1,
+      "paragraphs": 300,
+      "paragraph_bytes": 260,
+      "tables": 3,
+      "rows": 20,
+      "cols": 6,
+      "header_footer": true,
+      "roles": 64
+    }
+  }
+}

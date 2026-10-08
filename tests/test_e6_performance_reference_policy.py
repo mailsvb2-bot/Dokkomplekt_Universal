@@ -248,9 +248,9 @@ def test_reference_policy_rejects_missing_special_class_sources(tmp_path: Path) 
 
 def test_reference_policy_rejects_invalid_special_source_hash(tmp_path: Path) -> None:
     corpus_dir = materialized_fake_corpus(tmp_path)
-    special_path = special_sources(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
     document = gate.load_object(special_path)
-    document["sources"]["ocr"] = ["NOT-A-SHA"]
+    document["sources"]["ocr"][0]["sha256"] = "NOT-A-SHA"
     write_json(special_path, document)
     with pytest.raises(ValueError, match="must be lowercase SHA-256"):
         reference_policy.build_reference(
@@ -261,11 +261,10 @@ def test_reference_policy_rejects_invalid_special_source_hash(tmp_path: Path) ->
             bindings_path=bindings(tmp_path),
             budgets_path=budgets(tmp_path),
             special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )
-
-
 
 def test_reference_policy_rejects_missing_special_source_artifact(tmp_path: Path) -> None:
     corpus_dir = materialized_fake_corpus(tmp_path)

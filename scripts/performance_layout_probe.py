@@ -24,7 +24,7 @@ from PIL import Image
 
 PROOF_SCHEMA = "dokkomplekt.performance-layout-proof.v1"
 PRODUCER = "performance_layout_probe.py"
-CLAIM = "runtime_layout_verified_installed_product_path"
+CLAIM = "runtime_layout_verified_application_production_converter_path"
 APP_EVIDENCE_SCHEMA = "dokkomplekt.fpr17-pdf-export-e2e.v1"
 FONT_EXTENSIONS = {".ttf", ".ttc", ".otf", ".otc", ".woff", ".woff2"}
 
@@ -196,7 +196,7 @@ def _verify_pages(
 
 def validate_proof(proof: dict[str, Any]) -> None:
     expected = {
-        "schema", "producer", "claim", "proof_id", "installed_app_sha256",
+        "schema", "producer", "claim", "proof_id", "application_sha256",
         "app_version", "source_sha256", "pdf_sha256", "converter_sha256",
         "converter_version", "conversion_duration_ms", "application_elapsed_ms",
         "layout_check_duration_ms", "os", "font_set_sha256", "font_file_count",
@@ -213,7 +213,7 @@ def validate_proof(proof: dict[str, Any]) -> None:
     ):
         raise ValueError("layout proof provenance/verdict is invalid")
     for key in (
-        "installed_app_sha256", "source_sha256", "pdf_sha256",
+        "application_sha256", "source_sha256", "pdf_sha256",
         "converter_sha256", "font_set_sha256", "visual_baseline_sha256",
     ):
         if not _is_sha256(proof.get(key)):
@@ -297,7 +297,7 @@ def build_proof(
     dpi: int,
 ) -> dict[str, Any]:
     if not app_path.is_absolute() or not app_path.is_file():
-        raise ValueError("installed app path must be an absolute file")
+        raise ValueError("application path must be an absolute file")
     if not source_path.is_absolute() or not source_path.is_file():
         raise ValueError("layout source path must be an absolute file")
     if tolerance < 0 or dpi <= 0:
@@ -331,10 +331,10 @@ def build_proof(
         application_elapsed_ms = (time.monotonic() - started) * 1000.0
         if completed.returncode != 0:
             raise ValueError(
-                f"installed application layout command failed with exit code {completed.returncode}"
+                f"application layout command failed with exit code {completed.returncode}"
             )
         if not app_evidence.is_file() or not pdf_path.is_file():
-            raise ValueError("installed application did not produce layout evidence and PDF")
+            raise ValueError("application did not produce layout evidence and PDF")
         evidence = _load(app_evidence)
         required = {
             "schema", "action", "app_version", "source_sha256", "pdf_sha256",
@@ -342,18 +342,18 @@ def build_proof(
             "converter_version", "conversion_duration_ms",
         }
         if not required.issubset(evidence):
-            raise ValueError("installed application PDF evidence lacks layout identity fields")
+            raise ValueError("application PDF evidence lacks layout identity fields")
         if (
             evidence.get("schema") != APP_EVIDENCE_SCHEMA
             or evidence.get("action") != "export_pdf"
             or evidence.get("pdf_signature_valid") is not True
             or evidence.get("converter") != "production convert_office_document_to_pdf"
         ):
-            raise ValueError("installed application PDF evidence provenance is invalid")
+            raise ValueError("application PDF evidence provenance is invalid")
         if evidence.get("source_sha256") != source_sha256:
-            raise ValueError("installed application evidence source SHA differs")
+            raise ValueError("application evidence source SHA differs")
         if evidence.get("pdf_sha256") != _sha256(pdf_path):
-            raise ValueError("installed application evidence PDF SHA differs")
+            raise ValueError("application evidence PDF SHA differs")
         if not _is_sha256(evidence.get("converter_sha256")):
             raise ValueError("installed application converter SHA is invalid")
         if not isinstance(evidence.get("converter_version"), str) or not evidence["converter_version"].strip():
@@ -382,7 +382,7 @@ def build_proof(
                     + baseline_sha256
                 ).encode("ascii")
             ).hexdigest()[:32],
-            "installed_app_sha256": _sha256(app_path),
+            "application_sha256": _sha256(app_path),
             "app_version": evidence.get("app_version"),
             "source_sha256": source_sha256,
             "pdf_sha256": evidence["pdf_sha256"],

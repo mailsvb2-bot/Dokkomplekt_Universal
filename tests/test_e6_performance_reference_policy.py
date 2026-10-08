@@ -112,22 +112,31 @@ def budgets(tmp_path: Path) -> Path:
     )
 
 
-def special_sources(tmp_path: Path) -> Path:
-    return write_json(
+def special_sources(tmp_path: Path) -> tuple[Path, Path]:
+    artifacts_dir = tmp_path / "special-artifacts"
+    sources: dict[str, list[dict[str, str]]] = {}
+    for class_name in gate.CANONICAL_SPECIAL_CLASSES:
+        relative = f"{class_name}/{class_name}.bin"
+        artifact = artifacts_dir / relative
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(f"special:{class_name}".encode("ascii"))
+        sources[class_name] = [
+            {
+                "relative_path": relative,
+                "sha256": sha256(artifact),
+            }
+        ]
+    manifest = write_json(
         tmp_path / "special-sources.json",
         {
             "schema": reference_policy.SPECIAL_SOURCES_SCHEMA,
-            "sources": {
-                class_name: [
-                    hashlib.sha256(f"special:{class_name}".encode("ascii")).hexdigest()
-                ]
-                for class_name in gate.CANONICAL_SPECIAL_CLASSES
-            },
+            "sources": sources,
         },
     )
-
+    return manifest, artifacts_dir
 
 def build(tmp_path: Path, corpus_dir: Path) -> dict[str, object]:
+    special_path, artifacts_dir = special_sources(tmp_path)
     return reference_policy.build_reference(
         targets_path=TARGETS,
         spec_path=SPEC,
@@ -135,7 +144,8 @@ def build(tmp_path: Path, corpus_dir: Path) -> dict[str, object]:
         environment_path=environment(tmp_path),
         bindings_path=bindings(tmp_path),
         budgets_path=budgets(tmp_path),
-        special_sources_path=special_sources(tmp_path),
+        special_sources_path=special_path,
+        special_source_artifacts_dir=artifacts_dir,
         reference_id="reference-machine-01",
         min_samples_per_series=3,
     )
@@ -185,7 +195,8 @@ def test_reference_policy_rejects_incomplete_environment(tmp_path: Path) -> None
             environment_path=env_path,
             bindings_path=bindings(tmp_path),
             budgets_path=budgets(tmp_path),
-            special_sources_path=special_sources(tmp_path),
+            special_sources_path=special_sources(tmp_path)[0],
+            special_source_artifacts_dir=special_sources(tmp_path)[1],
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )
@@ -206,7 +217,8 @@ def test_reference_policy_rejects_duplicate_metric_series_ids(tmp_path: Path) ->
             environment_path=environment(tmp_path),
             bindings_path=bindings_path,
             budgets_path=budgets(tmp_path),
-            special_sources_path=special_sources(tmp_path),
+            special_sources_path=special_sources(tmp_path)[0],
+            special_source_artifacts_dir=special_sources(tmp_path)[1],
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )
@@ -215,7 +227,7 @@ def test_reference_policy_rejects_duplicate_metric_series_ids(tmp_path: Path) ->
 
 def test_reference_policy_rejects_missing_special_class_sources(tmp_path: Path) -> None:
     corpus_dir = materialized_fake_corpus(tmp_path)
-    special_path = special_sources(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
     document = gate.load_object(special_path)
     del document["sources"]["pdf"]
     write_json(special_path, document)
@@ -228,6 +240,7 @@ def test_reference_policy_rejects_missing_special_class_sources(tmp_path: Path) 
             bindings_path=bindings(tmp_path),
             budgets_path=budgets(tmp_path),
             special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )
@@ -235,9 +248,9 @@ def test_reference_policy_rejects_missing_special_class_sources(tmp_path: Path) 
 
 def test_reference_policy_rejects_invalid_special_source_hash(tmp_path: Path) -> None:
     corpus_dir = materialized_fake_corpus(tmp_path)
-    special_path = special_sources(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
     document = gate.load_object(special_path)
-    document["sources"]["ocr"] = ["NOT-A-SHA"]
+    document["sources"]["ocr"][0]["sha256"] = "NOT-A-SHA"
     write_json(special_path, document)
     with pytest.raises(ValueError, match="must be lowercase SHA-256"):
         reference_policy.build_reference(
@@ -248,6 +261,124 @@ def test_reference_policy_rejects_invalid_special_source_hash(tmp_path: Path) ->
             bindings_path=bindings(tmp_path),
             budgets_path=budgets(tmp_path),
             special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )
+
+def test_reference_policy_rejects_missing_special_source_artifact(tmp_path: Path) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
+    target = artifacts_dir / "pdf" / "pdf.bin"
+    target.unlink()
+    with pytest.raises(ValueError, match="artifact missing"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )
+
+
+def test_reference_policy_rejects_tampered_special_source_artifact(tmp_path: Path) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
+    target = artifacts_dir / "ocr" / "ocr.bin"
+    target.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="artifact hash mismatch"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )
+
+
+def test_reference_policy_rejects_special_source_path_traversal(tmp_path: Path) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
+    document = gate.load_object(special_path)
+    document["sources"]["runtime_layout"][0]["relative_path"] = "../escape.bin"
+    write_json(special_path, document)
+    with pytest.raises(ValueError, match="must remain inside artifacts directory"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )
+
+
+
+@pytest.mark.parametrize("escaped", ["/outside.bin", r"\outside.bin"])
+def test_reference_policy_rejects_rooted_special_source_paths(
+    tmp_path: Path,
+    escaped: str,
+) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
+    document = gate.load_object(special_path)
+    document["sources"]["runtime_layout"][0]["relative_path"] = escaped
+    write_json(special_path, document)
+    with pytest.raises(ValueError, match="must remain inside artifacts directory"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )
+
+
+def test_reference_policy_rejects_symlink_escape(tmp_path: Path) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"external-special-source")
+    link = artifacts_dir / "runtime_layout" / "escape.bin"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable in this test environment")
+    document = gate.load_object(special_path)
+    document["sources"]["runtime_layout"][0] = {
+        "relative_path": "runtime_layout/escape.bin",
+        "sha256": sha256(outside),
+    }
+    write_json(special_path, document)
+    with pytest.raises(ValueError, match="escapes artifacts directory"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )

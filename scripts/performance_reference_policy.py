@@ -113,7 +113,7 @@ def _verify_corpus(spec_path: Path, corpus_dir: Path) -> tuple[dict[str, list[st
     return coverage, _sha256(manifest_path)
 
 
-def _load_special_sources(path: Path) -> dict[str, list[str]]:
+def _load_special_sources(path: Path, artifacts_dir: Path) -> dict[str, list[str]]:
     document = _load(path)
     if set(document) != {"schema", "sources"}:
         raise ValueError("special coverage source manifest keys must be closed")
@@ -131,18 +131,41 @@ def _load_special_sources(path: Path) -> dict[str, list[str]]:
         seen: set[str] = set()
         normalized_values: list[str] = []
         for index, value in enumerate(values):
+            if not isinstance(value, dict) or set(value) != {"relative_path", "sha256"}:
+                raise ValueError(
+                    f"special coverage sources {class_name}[{index}] must define relative_path and sha256"
+                )
+            relative = value.get("relative_path")
+            expected_sha = value.get("sha256")
+            if not isinstance(relative, str) or not relative:
+                raise ValueError(
+                    f"special coverage sources {class_name}[{index}].relative_path must be non-empty"
+                )
+            rel_path = Path(relative)
+            if rel_path.is_absolute() or ".." in rel_path.parts:
+                raise ValueError(
+                    f"special coverage sources {class_name}[{index}].relative_path must remain inside artifacts directory"
+                )
             if (
-                not isinstance(value, str)
-                or len(value) != 64
-                or any(ch not in "0123456789abcdef" for ch in value)
+                not isinstance(expected_sha, str)
+                or len(expected_sha) != 64
+                or any(ch not in "0123456789abcdef" for ch in expected_sha)
             ):
                 raise ValueError(
-                    f"special coverage sources {class_name}[{index}] must be lowercase SHA-256"
+                    f"special coverage sources {class_name}[{index}].sha256 must be lowercase SHA-256"
                 )
-            if value in seen:
-                raise ValueError(f"duplicate special coverage source for {class_name}: {value}")
-            seen.add(value)
-            normalized_values.append(value)
+            actual_path = artifacts_dir / rel_path
+            if not actual_path.is_file():
+                raise ValueError(f"special coverage source artifact missing: {relative}")
+            actual_sha = _sha256(actual_path)
+            if actual_sha != expected_sha:
+                raise ValueError(f"special coverage source hash mismatch: {relative}")
+            if actual_sha in seen:
+                raise ValueError(
+                    f"duplicate special coverage source for {class_name}: {actual_sha}"
+                )
+            seen.add(actual_sha)
+            normalized_values.append(actual_sha)
         normalized[class_name] = sorted(normalized_values)
     return normalized
 
@@ -156,6 +179,7 @@ def build_reference(
     bindings_path: Path,
     budgets_path: Path,
     special_sources_path: Path,
+    special_sources_dir: Path,
     reference_id: str,
     min_samples_per_series: int,
 ) -> dict[str, Any]:
@@ -172,7 +196,9 @@ def build_reference(
         raise ValueError("min_samples_per_series must be an integer >= 3")
 
     coverage_sources, corpus_manifest_sha256 = _verify_corpus(spec_path, corpus_dir)
-    coverage_sources.update(_load_special_sources(special_sources_path))
+    coverage_sources.update(
+        _load_special_sources(special_sources_path, special_sources_dir)
+    )
     spec = _load(spec_path)
 
     environment_document = _load(environment_path)
@@ -251,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bindings", required=True, type=Path)
     parser.add_argument("--budgets", required=True, type=Path)
     parser.add_argument("--special-sources", required=True, type=Path)
+    parser.add_argument("--special-sources-dir", required=True, type=Path)
     parser.add_argument("--reference-id", required=True)
     parser.add_argument("--min-samples", type=int, default=3)
     parser.add_argument("--output", required=True, type=Path)
@@ -264,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
             bindings_path=args.bindings,
             budgets_path=args.budgets,
             special_sources_path=args.special_sources,
+            special_sources_dir=args.special_sources_dir,
             reference_id=args.reference_id,
             min_samples_per_series=args.min_samples,
         )

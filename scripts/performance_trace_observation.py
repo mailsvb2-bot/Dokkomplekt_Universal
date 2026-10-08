@@ -21,6 +21,16 @@ TRACE_SCHEMA = "dokkomplekt.performance-trace.v1"
 PLAN_SCHEMA = "dokkomplekt.performance-trace-measurement-plan.v1"
 OBSERVATION_SCHEMA = "dokkomplekt.performance-observation.v1"
 OBSERVATION_CLAIM = "single_sample_only_not_slo_verdict"
+BENCHMARK_CONTEXT_SCHEMA = "dokkomplekt.performance-benchmark-context.v1"
+BENCHMARK_CONTEXT_PRODUCER = "performance_benchmark_harness.py"
+BENCHMARK_CONTEXT_CLAIM = "benchmark_lifecycle_context_only_not_slo_verdict"
+BENCHMARK_CONTEXT_KEYS = {
+    "schema", "producer", "claim", "session_id", "measurement_plan_sha256",
+    "corpus_spec_sha256", "source_sha256", "trace_sha256", "cache_state",
+    "run_phase", "cache_action", "cache_command_sha256",
+    "measurement_command_sha256", "prior_trace_sha256", "cache_duration_ms",
+    "measurement_duration_ms",
+}
 
 TRACE_KEYS = {
     "schema",
@@ -409,14 +419,92 @@ def _validate_plan(
         raise ValueError(f"{class_name} plan must enable {special_flag}")
 
 
-def _validate_trace_against_plan(trace_info: dict[str, Any], plan: dict[str, Any]) -> None:
+def _validate_benchmark_context(
+    path: Path,
+    *,
+    plan_path: Path,
+    trace_path: Path,
+    trace_info: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    value = _load(path)
+    _exact_keys(value, BENCHMARK_CONTEXT_KEYS, "benchmark context")
+    if (
+        value.get("schema") != BENCHMARK_CONTEXT_SCHEMA
+        or value.get("producer") != BENCHMARK_CONTEXT_PRODUCER
+        or value.get("claim") != BENCHMARK_CONTEXT_CLAIM
+    ):
+        raise ValueError("benchmark context provenance is invalid")
+    if value.get("measurement_plan_sha256") != _sha256(plan_path):
+        raise ValueError("benchmark context is not bound to the exact measurement plan")
+    if value.get("trace_sha256") != _sha256(trace_path):
+        raise ValueError("benchmark context is not bound to the exact trace")
+    if value.get("source_sha256") != trace_info.get("source_sha256"):
+        raise ValueError("benchmark context source does not match trace source")
+    cache_state = value.get("cache_state")
+    if cache_state not in gate.CANONICAL_CACHE_STATES:
+        raise ValueError("benchmark context cache_state is invalid")
+    if cache_state != plan.get("cache_state"):
+        raise ValueError("benchmark context cache_state does not match plan.cache_state")
+    cache_action = value.get("cache_action")
+    expected_action = "cold_reset" if cache_state == "cold_cache" else "warm_prime"
+    if cache_action != expected_action:
+        raise ValueError("benchmark context cache action does not prove declared cache_state")
+    run_phase = value.get("run_phase")
+    if run_phase not in ("first_run", "repeat_run", "unclassified"):
+        raise ValueError("benchmark context run_phase is invalid")
+    run_kind = plan.get("run_kind")
+    if run_kind in ("first_run", "repeat_run") and run_phase != run_kind:
+        raise ValueError("benchmark context run_phase does not match plan.run_kind")
+    prior = value.get("prior_trace_sha256")
+    if run_phase == "first_run" and prior is not None:
+        raise ValueError("first_run benchmark context cannot contain prior trace evidence")
+    if run_phase == "repeat_run" and (
+        not isinstance(prior, str)
+        or len(prior) != 64
+        or any(character not in "0123456789abcdef" for character in prior)
+    ):
+        raise ValueError("repeat_run benchmark context requires prior trace evidence")
+    for key in (
+        "corpus_spec_sha256",
+        "cache_command_sha256",
+        "measurement_command_sha256",
+    ):
+        candidate = value.get(key)
+        if (
+            not isinstance(candidate, str)
+            or len(candidate) != 64
+            or any(character not in "0123456789abcdef" for character in candidate)
+        ):
+            raise ValueError(f"benchmark context {key} is invalid")
+    for key in ("cache_duration_ms", "measurement_duration_ms"):
+        _nonnegative_number(value.get(key), f"benchmark context {key}")
+    raw_context = trace_info["context"]
+    if raw_context["cache_state"] not in ("unclassified", cache_state):
+        raise ValueError("trace cache_state conflicts with benchmark context")
+    if run_phase != "unclassified" and raw_context["run_phase"] not in (
+        "unclassified",
+        run_phase,
+    ):
+        raise ValueError("trace run_phase conflicts with benchmark context")
+    return value
+
+
+def _validate_trace_against_plan(
+    trace_info: dict[str, Any],
+    plan: dict[str, Any],
+    benchmark_context: dict[str, Any] | None = None,
+) -> None:
     context = trace_info["context"]
     if trace_info["app_version"] != plan["expected_app_version"]:
         raise ValueError("trace app_version does not match the predeclared measurement plan")
     if plan.get("expected_source_sha256") is not None:
         if trace_info.get("source_sha256") != plan["expected_source_sha256"]:
             raise ValueError("trace source_sha256 does not match the predeclared measurement plan")
-    if context["cache_state"] != plan["cache_state"]:
+    effective_cache_state = context["cache_state"]
+    if effective_cache_state == "unclassified" and benchmark_context is not None:
+        effective_cache_state = benchmark_context["cache_state"]
+    if effective_cache_state != plan["cache_state"]:
         raise ValueError("trace cache_state does not match plan.cache_state")
     if context["workload"] != plan["expected_workload"]:
         raise ValueError("trace workload does not match the predeclared measurement plan")
@@ -436,7 +524,10 @@ def _validate_trace_against_plan(trace_info: dict[str, Any], plan: dict[str, Any
         "batch_10": "batch_10",
         "batch_50": "batch_50",
     }
-    if run_kind in run_phase_map and context["run_phase"] != run_phase_map[run_kind]:
+    effective_run_phase = context["run_phase"]
+    if effective_run_phase == "unclassified" and benchmark_context is not None:
+        effective_run_phase = benchmark_context["run_phase"]
+    if run_kind in run_phase_map and effective_run_phase != run_phase_map[run_kind]:
         raise ValueError("trace run_phase does not match plan.run_kind")
     if run_kind in workload_map and context["workload"] != workload_map[run_kind]:
         raise ValueError("trace workload does not match plan.run_kind")
@@ -472,6 +563,7 @@ def build_observation(
     reference_path: Path,
     plan_path: Path,
     trace_path: Path,
+    benchmark_context_path: Path | None = None,
 ) -> dict[str, Any]:
     targets = gate.load_object(targets_path)
     target_errors = gate.validate_targets(targets)
@@ -487,7 +579,18 @@ def build_observation(
     _validate_plan(plan, targets, reference)
     trace = _load(trace_path)
     trace_info = _validate_trace(trace)
-    _validate_trace_against_plan(trace_info, plan)
+    benchmark_context = (
+        _validate_benchmark_context(
+            benchmark_context_path,
+            plan_path=plan_path,
+            trace_path=trace_path,
+            trace_info=trace_info,
+            plan=plan,
+        )
+        if benchmark_context_path is not None
+        else None
+    )
+    _validate_trace_against_plan(trace_info, plan, benchmark_context)
     sample_ms, derivation = _sample(trace_info, plan["metric"])
 
     return {
@@ -497,6 +600,11 @@ def build_observation(
         "reference_policy_sha256": _sha256(reference_path),
         "measurement_plan_sha256": _sha256(plan_path),
         "trace_sha256": _sha256(trace_path),
+        "benchmark_context_sha256": (
+            _sha256(benchmark_context_path)
+            if benchmark_context_path is not None
+            else None
+        ),
         "reference_id": reference["reference_id"],
         "corpus_id": reference["corpus_id"],
         "series_id": plan["series_id"],
@@ -530,12 +638,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reference", required=True, type=Path)
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--trace", required=True, type=Path)
+    parser.add_argument("--benchmark-context", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
 
     try:
         observation = build_observation(
-            args.targets, args.reference, args.plan, args.trace
+            args.targets, args.reference, args.plan, args.trace, args.benchmark_context
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"PERFORMANCE OBSERVATION FAILED: {exc}")

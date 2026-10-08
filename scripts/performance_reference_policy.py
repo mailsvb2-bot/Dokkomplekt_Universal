@@ -20,6 +20,7 @@ from scripts import performance_slo_gate as gate
 ENVIRONMENT_SCHEMA = "dokkomplekt.performance-environment-snapshot.v1"
 BINDINGS_SCHEMA = "dokkomplekt.performance-metric-bindings.v1"
 BUDGETS_SCHEMA = "dokkomplekt.performance-resource-budgets.v1"
+SPECIAL_SOURCES_SCHEMA = "dokkomplekt.performance-special-coverage-sources.v1"
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -112,6 +113,40 @@ def _verify_corpus(spec_path: Path, corpus_dir: Path) -> tuple[dict[str, list[st
     return coverage, _sha256(manifest_path)
 
 
+def _load_special_sources(path: Path) -> dict[str, list[str]]:
+    document = _load(path)
+    if set(document) != {"schema", "sources"}:
+        raise ValueError("special coverage source manifest keys must be closed")
+    if document.get("schema") != SPECIAL_SOURCES_SCHEMA:
+        raise ValueError("special coverage source manifest schema is invalid")
+    sources = document.get("sources")
+    expected = set(gate.CANONICAL_SPECIAL_CLASSES)
+    if not isinstance(sources, dict) or set(sources) != expected:
+        raise ValueError("special coverage sources must define exactly the canonical special classes")
+    normalized: dict[str, list[str]] = {}
+    for class_name in gate.CANONICAL_SPECIAL_CLASSES:
+        values = sources.get(class_name)
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"special coverage sources for {class_name} must be non-empty")
+        seen: set[str] = set()
+        normalized_values: list[str] = []
+        for index, value in enumerate(values):
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(ch not in "0123456789abcdef" for ch in value)
+            ):
+                raise ValueError(
+                    f"special coverage sources {class_name}[{index}] must be lowercase SHA-256"
+                )
+            if value in seen:
+                raise ValueError(f"duplicate special coverage source for {class_name}: {value}")
+            seen.add(value)
+            normalized_values.append(value)
+        normalized[class_name] = sorted(normalized_values)
+    return normalized
+
+
 def build_reference(
     *,
     targets_path: Path,
@@ -120,6 +155,7 @@ def build_reference(
     environment_path: Path,
     bindings_path: Path,
     budgets_path: Path,
+    special_sources_path: Path,
     reference_id: str,
     min_samples_per_series: int,
 ) -> dict[str, Any]:
@@ -136,6 +172,7 @@ def build_reference(
         raise ValueError("min_samples_per_series must be an integer >= 3")
 
     coverage_sources, corpus_manifest_sha256 = _verify_corpus(spec_path, corpus_dir)
+    coverage_sources.update(_load_special_sources(special_sources_path))
     spec = _load(spec_path)
 
     environment_document = _load(environment_path)
@@ -213,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--environment", required=True, type=Path)
     parser.add_argument("--bindings", required=True, type=Path)
     parser.add_argument("--budgets", required=True, type=Path)
+    parser.add_argument("--special-sources", required=True, type=Path)
     parser.add_argument("--reference-id", required=True)
     parser.add_argument("--min-samples", type=int, default=3)
     parser.add_argument("--output", required=True, type=Path)
@@ -225,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
             environment_path=args.environment,
             bindings_path=args.bindings,
             budgets_path=args.budgets,
+            special_sources_path=args.special_sources,
             reference_id=args.reference_id,
             min_samples_per_series=args.min_samples,
         )

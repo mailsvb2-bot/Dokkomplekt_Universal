@@ -1979,15 +1979,29 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
     # Routing for a newly loaded source is allowed to propose a different bundle.
     # FPR-08 already proved restart selection above; restore the persisted button
     # explicitly here only so template-binding publication can be exercised.
-    $restartCheckbox = Wait-UiElement -Description 'FPR-08 persisted document checkbox' -TimeoutSeconds 30 -Probe {
+    # The source router may be settling or may have kept the checkbox checked.
+    # Blindly clicking it can DESELECT the only restored template. Normalize
+    # selection before an intentional check, exactly as in the E2 installed path.
+    $restartCheckboxProbe = {
       $currentAppWindow = Find-LiveAppWindow
       if ($null -eq $currentAppWindow) { return $null }
       $condition = [System.Windows.Automation.PropertyCondition]::new(
         [System.Windows.Automation.AutomationElement]::NameProperty,
         "Добавить $expectedTemplateButtonName в комплект"
       )
-      $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+      $checkbox = $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+      if ($null -eq $checkbox) { return $null }
+      try { if (-not $checkbox.Current.IsEnabled) { return $null } } catch { return $null }
+      return $checkbox
     }
+    Wait-UiElement -Description 'FPR-08 restored checkbox ready' -TimeoutSeconds 30 -Probe $restartCheckboxProbe | Out-Null
+    $currentAppWindow = Find-LiveAppWindow
+    $restartClearSelection = Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Снять выбор')
+    if ($null -ne $restartClearSelection) {
+      Invoke-UiElementPhysically -Element $restartClearSelection -Description 'FPR-08 clear stale selection'
+    }
+    # React may remount checkbox nodes after clearing; resolve a fresh element.
+    $restartCheckbox = Wait-UiElement -Description 'FPR-08 persisted document checkbox' -TimeoutSeconds 30 -Probe $restartCheckboxProbe
     Invoke-UiElementPhysically -Element $restartCheckbox -Description 'FPR-08 persisted document checkbox'
     $restartGenerationAction = Wait-UiElement -Description 'FPR-08 one-document generation after explicit restore' -TimeoutSeconds 30 -Probe {
       $currentAppWindow = Find-LiveAppWindow

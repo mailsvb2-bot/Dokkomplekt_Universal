@@ -84,6 +84,11 @@ def test_new_template_publication_has_capability_manifest_gate() -> None:
 
     assert "pub struct DocxCapabilityManifest" in docx
     assert "pub fn inspect_docx_capabilities_file(" in docx
+    assert "pub runtime_layout_required: bool" in docx
+    assert "#[serde(default)]\n    pub runtime_layout_required: bool" in docx
+    assert "capability_manifest_reads_legacy_v1_without_runtime_layout_flag" in docx
+    assert "pub fn publication_blocking_issues(&self)" in docx
+    assert '"runtime_layout_check_required"' in docx
     assert '"custom_xml_requires_explicit_sanitization_policy"' in docx
     assert '"data_binding_not_supported_for_published_reference"' in docx
     assert '"revision_markup_requires_explicit_sanitization_policy"' in docx
@@ -94,6 +99,8 @@ def test_new_template_publication_has_capability_manifest_gate() -> None:
     assert "custom_xml_only" in admission_owner
     assert "learning_validation_id.is_none()" in admission_owner
     assert "snapshot.sanitize_hidden_custom_xml_for_publication(app)?" in admission_owner
+    assert "let blockers = manifest.publication_blocking_issues();" in admission_owner
+    assert "runtime layout check" in admission_owner
 
     admission = commands.index("admit_template_capabilities_for_publication(")
     pack_creation = commands.index(

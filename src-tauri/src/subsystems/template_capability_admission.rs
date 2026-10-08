@@ -27,9 +27,10 @@ fn admit_template_capabilities_for_publication(
     }
 
     if !manifest.publishable() {
+        let blockers = manifest.publication_blocking_issues();
         return Err(format!(
-            "Шаблон «{button_label}» пока нельзя опубликовать: обнаружены неподдерживаемые скрытые или активные конструкции: {}. Удалите их в Word либо сохраните очищенную копию DOCX и повторите обучение.",
-            manifest.blocking_issues.join(", ")
+            "Шаблон «{button_label}» пока нельзя опубликовать: обязательные проверки или ограничения не выполнены: {}. Для page-sensitive layout требуется подтверждённый runtime layout check; скрытые/активные конструкции необходимо удалить либо явно санитизировать.",
+            blockers.join(", ")
         ));
     }
 

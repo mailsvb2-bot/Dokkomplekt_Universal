@@ -163,8 +163,8 @@ def resources(tmp_path: Path, reference_path: Path) -> Path:
 
 
 def test_unc_root_requires_server_and_share() -> None:
-    assert probe._unc_root(r"\\\\server\\share\\folder\\file.docx") == "\\\\server\\share\\"
-    for malformed in (r"\\\\server", "\\\\server\\", r"\\\\\\share"):
+    assert probe._unc_root(r"\\server\share\folder\file.docx") == "\\\\server\\share\\"
+    for malformed in (r"\\server", "\\\\server\\", r"\\\share"):
         with pytest.raises(ValueError, match="server and share"):
             probe._unc_root(malformed)
 

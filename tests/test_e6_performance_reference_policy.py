@@ -325,3 +325,60 @@ def test_reference_policy_rejects_special_source_path_traversal(tmp_path: Path) 
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )
+
+
+
+@pytest.mark.parametrize("escaped", ["/outside.bin", r"\outside.bin"])
+def test_reference_policy_rejects_rooted_special_source_paths(
+    tmp_path: Path,
+    escaped: str,
+) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
+    document = gate.load_object(special_path)
+    document["sources"]["runtime_layout"][0]["relative_path"] = escaped
+    write_json(special_path, document)
+    with pytest.raises(ValueError, match="must remain inside artifacts directory"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )
+
+
+def test_reference_policy_rejects_symlink_escape(tmp_path: Path) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path, artifacts_dir = special_sources(tmp_path)
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"external-special-source")
+    link = artifacts_dir / "runtime_layout" / "escape.bin"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable in this test environment")
+    document = gate.load_object(special_path)
+    document["sources"]["runtime_layout"][0] = {
+        "relative_path": "runtime_layout/escape.bin",
+        "sha256": sha256(outside),
+    }
+    write_json(special_path, document)
+    with pytest.raises(ValueError, match="escapes artifacts directory"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
+            special_source_artifacts_dir=artifacts_dir,
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )

@@ -112,6 +112,21 @@ def budgets(tmp_path: Path) -> Path:
     )
 
 
+def special_sources(tmp_path: Path) -> Path:
+    return write_json(
+        tmp_path / "special-sources.json",
+        {
+            "schema": reference_policy.SPECIAL_SOURCES_SCHEMA,
+            "sources": {
+                class_name: [
+                    hashlib.sha256(f"special:{class_name}".encode("ascii")).hexdigest()
+                ]
+                for class_name in gate.CANONICAL_SPECIAL_CLASSES
+            },
+        },
+    )
+
+
 def build(tmp_path: Path, corpus_dir: Path) -> dict[str, object]:
     return reference_policy.build_reference(
         targets_path=TARGETS,
@@ -120,6 +135,7 @@ def build(tmp_path: Path, corpus_dir: Path) -> dict[str, object]:
         environment_path=environment(tmp_path),
         bindings_path=bindings(tmp_path),
         budgets_path=budgets(tmp_path),
+        special_sources_path=special_sources(tmp_path),
         reference_id="reference-machine-01",
         min_samples_per_series=3,
     )
@@ -138,9 +154,13 @@ def test_reference_policy_is_bound_to_exact_corpus_and_measured_inputs(
     assert reference["corpus_manifest_sha256"] == sha256(
         corpus_dir / "corpus-manifest.json"
     )
-    assert set(reference["coverage_sources"]) == set(gate.CANONICAL_CORPUS_CLASSES)
+    assert set(reference["coverage_sources"]) == (
+        set(gate.CANONICAL_CORPUS_CLASSES) | set(gate.CANONICAL_SPECIAL_CLASSES)
+    )
     assert len(reference["coverage_sources"]["batch_10"]) == 10
     assert len(reference["coverage_sources"]["batch_50"]) == 50
+    for class_name in gate.CANONICAL_SPECIAL_CLASSES:
+        assert len(reference["coverage_sources"][class_name]) == 1
 
 
 def test_reference_policy_rejects_tampered_corpus_file(tmp_path: Path) -> None:
@@ -165,6 +185,7 @@ def test_reference_policy_rejects_incomplete_environment(tmp_path: Path) -> None
             environment_path=env_path,
             bindings_path=bindings(tmp_path),
             budgets_path=budgets(tmp_path),
+            special_sources_path=special_sources(tmp_path),
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )
@@ -185,6 +206,48 @@ def test_reference_policy_rejects_duplicate_metric_series_ids(tmp_path: Path) ->
             environment_path=environment(tmp_path),
             bindings_path=bindings_path,
             budgets_path=budgets(tmp_path),
+            special_sources_path=special_sources(tmp_path),
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )
+
+
+
+def test_reference_policy_rejects_missing_special_class_sources(tmp_path: Path) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path = special_sources(tmp_path)
+    document = gate.load_object(special_path)
+    del document["sources"]["pdf"]
+    write_json(special_path, document)
+    with pytest.raises(ValueError, match="exactly the canonical special classes"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
+            reference_id="reference-machine-01",
+            min_samples_per_series=3,
+        )
+
+
+def test_reference_policy_rejects_invalid_special_source_hash(tmp_path: Path) -> None:
+    corpus_dir = materialized_fake_corpus(tmp_path)
+    special_path = special_sources(tmp_path)
+    document = gate.load_object(special_path)
+    document["sources"]["ocr"] = ["NOT-A-SHA"]
+    write_json(special_path, document)
+    with pytest.raises(ValueError, match="must be lowercase SHA-256"):
+        reference_policy.build_reference(
+            targets_path=TARGETS,
+            spec_path=SPEC,
+            corpus_dir=corpus_dir,
+            environment_path=environment(tmp_path),
+            bindings_path=bindings(tmp_path),
+            budgets_path=budgets(tmp_path),
+            special_sources_path=special_path,
             reference_id="reference-machine-01",
             min_samples_per_series=3,
         )

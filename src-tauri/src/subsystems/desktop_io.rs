@@ -300,10 +300,9 @@ fn print_pdf_with_lp(
     }
 }
 
-fn office_converter_identity() -> Result<(String, String), String> {
-    let converter = universal_intake::resolve_tool("soffice");
-    let (_, _, converter_sha256) = file_content_signature(&converter)?;
-    let mut command = std::process::Command::new(&converter);
+fn office_converter_identity(converter: &Path) -> Result<(String, String), String> {
+    let (_, _, converter_sha256) = file_content_signature(converter)?;
+    let mut command = std::process::Command::new(converter);
     command
         .arg("--version")
         .stdout(std::process::Stdio::piped())
@@ -338,9 +337,11 @@ fn run_fpr17_pdf_export_e2e(
     }
     let source = std::fs::canonicalize(source)
         .map_err(|error| format!("Не удалось открыть FPR-17 source: {error}"))?;
-    let (converter_sha256, converter_version) = office_converter_identity()?;
+    let converter = universal_intake::resolve_tool("soffice");
+    let (converter_sha256, converter_version) = office_converter_identity(&converter)?;
     let conversion_started = std::time::Instant::now();
-    let (temporary_pdf, temporary_dir) = convert_office_document_to_pdf(&source, false)?;
+    let (temporary_pdf, temporary_dir) =
+        convert_office_document_to_pdf_with_converter(&source, false, &converter)?;
     let conversion_duration_ms =
         crate::performance_trace_runtime::elapsed_milliseconds(conversion_started);
     let pdf_evidence_path = evidence_path.with_extension("pdf");
@@ -377,6 +378,15 @@ fn convert_office_document_to_pdf(
     path: &Path,
     pdfa_1: bool,
 ) -> Result<(PathBuf, PathBuf), String> {
+    let converter = universal_intake::resolve_tool("soffice");
+    convert_office_document_to_pdf_with_converter(path, pdfa_1, &converter)
+}
+
+fn convert_office_document_to_pdf_with_converter(
+    path: &Path,
+    pdfa_1: bool,
+    converter: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
     validate_printable_file(path)?;
     let extension = path
         .extension()
@@ -397,13 +407,12 @@ fn convert_office_document_to_pdf(
         std::env::temp_dir().join(format!("dokkomplekt-pdf-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&output_dir)
         .map_err(|error| format!("Не удалось создать временную папку PDF: {error}"))?;
-    let converter = universal_intake::resolve_tool("soffice");
     let filter = if pdfa_1 {
         r#"pdf:writer_pdf_Export:{"SelectPdfVersion":{"type":"long","value":"1"},"UseTaggedPDF":{"type":"boolean","value":"true"}}"#
     } else {
         "pdf"
     };
-    let mut command = std::process::Command::new(&converter);
+    let mut command = std::process::Command::new(converter);
     command
         .args([
             "--headless",

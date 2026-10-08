@@ -124,6 +124,7 @@ def observation(
             "reference_policy_sha256": sha256(reference_path),
             "measurement_plan_sha256": "1" * 64,
             "trace_sha256": trace_hash,
+            "benchmark_context_sha256": None,
             "reference_id": "reference-machine-01",
             "corpus_id": "performance-corpus-01",
             "series_id": series_id,

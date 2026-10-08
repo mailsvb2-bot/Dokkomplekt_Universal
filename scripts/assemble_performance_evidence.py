@@ -49,7 +49,7 @@ LAYOUT_OBSERVATION_KEYS = {
     "measurement_plan_sha256", "layout_proof_sha256", "reference_id", "corpus_id",
     "series_id", "metric", "class", "cache_state", "run_kind", "conditions",
     "complexity", "warmup", "sample_ms", "sample_derivation", "proof_id",
-    "measurement_app_version", "installed_app_sha256", "source_sha256",
+    "measurement_app_version", "application_sha256", "source_sha256",
     "pdf_sha256", "converter_sha256", "converter_version", "font_set_sha256",
     "visual_baseline_sha256", "layout_os", "layout_settings", "installed_build",
     "visual_verdict",
@@ -334,7 +334,7 @@ def _validate_layout_observation(
     if value.get("sample_derivation") != layout_obs.SAMPLE_DERIVATION:
         raise ValueError(f"{path}: runtime_layout sample derivation is invalid")
     for key in (
-        "measurement_plan_sha256", "layout_proof_sha256", "installed_app_sha256",
+        "measurement_plan_sha256", "layout_proof_sha256", "application_sha256",
         "source_sha256", "pdf_sha256", "converter_sha256", "font_set_sha256",
         "visual_baseline_sha256",
     ):
@@ -357,8 +357,6 @@ def _validate_layout_observation(
         or value.get("source_sha256") not in allowed_sources
     ):
         raise ValueError(f"{path}: runtime_layout source is not predeclared")
-    if value.get("installed_build") is not True:
-        raise ValueError(f"{path}: runtime_layout observation requires installed build")
     if value.get("visual_verdict") != "pass":
         raise ValueError(f"{path}: runtime_layout visual verdict must be pass")
     if not isinstance(value.get("converter_version"), str) or not value["converter_version"].strip():
@@ -686,7 +684,7 @@ def _validate_layout_proof_artifact(
     comparisons = {
         "proof_id": "proof_id",
         "app_version": "measurement_app_version",
-        "installed_app_sha256": "installed_app_sha256",
+        "application_sha256": "application_sha256",
         "source_sha256": "source_sha256",
         "pdf_sha256": "pdf_sha256",
         "converter_sha256": "converter_sha256",

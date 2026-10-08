@@ -174,6 +174,15 @@ class PerformanceTraceObservationTests(unittest.TestCase):
                     ),
                 )
 
+    def test_runtime_layout_admission_is_single_and_before_coverage_branch(self) -> None:
+        source = (ROOT / "scripts" / "performance_trace_observation.py").read_text(
+            encoding="utf-8"
+        )
+        assert source.count('if class_name == "runtime_layout":') == 1
+        assert source.index('if class_name == "runtime_layout":') < source.index(
+            "if not is_bound_slo_series:"
+        )
+
     def test_bound_runtime_layout_series_still_requires_dedicated_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             plan = self._plan(

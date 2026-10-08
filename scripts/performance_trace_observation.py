@@ -363,11 +363,6 @@ def _validate_plan(
                 f"{class_name} coverage requires dedicated storage-condition evidence; "
                 "runtime trace plans cannot prove storage topology"
             )
-        if class_name == "runtime_layout":
-            raise ValueError(
-                "runtime_layout coverage requires dedicated runtime-layout execution evidence; "
-                "generic runtime traces cannot prove that production layout synthesis executed"
-            )
         if expected_source_sha256 is None:
             raise ValueError("coverage series requires expected_source_sha256")
         coverage_sources = reference.get("coverage_sources")

@@ -300,6 +300,35 @@ fn print_pdf_with_lp(
     }
 }
 
+fn office_converter_identity() -> Result<(String, String), String> {
+    let converter = universal_intake::resolve_tool("soffice");
+    let (_, _, converter_sha256) = file_content_signature(&converter)?;
+    let mut command = std::process::Command::new(&converter);
+    command
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("Не удалось получить версию LibreOffice/soffice: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "LibreOffice/soffice --version завершился с кодом {}",
+            output.status
+        ));
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        return Err("LibreOffice/soffice не сообщил версию.".into());
+    }
+    Ok((converter_sha256, version))
+}
+
 fn run_fpr17_pdf_export_e2e(
     source: &Path,
     evidence_path: &Path,
@@ -309,7 +338,11 @@ fn run_fpr17_pdf_export_e2e(
     }
     let source = std::fs::canonicalize(source)
         .map_err(|error| format!("Не удалось открыть FPR-17 source: {error}"))?;
+    let (converter_sha256, converter_version) = office_converter_identity()?;
+    let conversion_started = std::time::Instant::now();
     let (temporary_pdf, temporary_dir) = convert_office_document_to_pdf(&source, false)?;
+    let conversion_duration_ms =
+        crate::performance_trace_runtime::elapsed_milliseconds(conversion_started);
     let pdf_evidence_path = evidence_path.with_extension("pdf");
     if pdf_evidence_path.exists() {
         std::fs::remove_file(&pdf_evidence_path)
@@ -333,6 +366,9 @@ fn run_fpr17_pdf_export_e2e(
         "pdf_sha256": pdf_sha256,
         "pdf_signature_valid": true,
         "converter": "production convert_office_document_to_pdf",
+        "converter_sha256": converter_sha256,
+        "converter_version": converter_version,
+        "conversion_duration_ms": conversion_duration_ms,
     }))
 }
 

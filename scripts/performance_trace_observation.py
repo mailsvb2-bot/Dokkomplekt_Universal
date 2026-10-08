@@ -351,6 +351,12 @@ def _validate_plan(
     # predeclared series are allowed solely to provide the Canon's required
     # corpus/cache/run-kind coverage; the evaluator never uses them for the
     # bound metric verdict.
+    if class_name == "runtime_layout":
+        raise ValueError(
+            "runtime_layout coverage requires dedicated runtime-layout execution evidence; "
+            "generic runtime traces cannot prove that production layout synthesis executed"
+        )
+
     if not is_bound_slo_series:
         if class_name in {"slow_storage", "network_storage"}:
             raise ValueError(

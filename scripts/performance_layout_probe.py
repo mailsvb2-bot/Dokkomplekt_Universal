@@ -199,7 +199,8 @@ def validate_proof(proof: dict[str, Any]) -> None:
         "schema", "producer", "claim", "proof_id", "installed_app_sha256",
         "app_version", "source_sha256", "pdf_sha256", "converter_sha256",
         "converter_version", "conversion_duration_ms", "application_elapsed_ms",
-        "os", "font_set_sha256", "font_file_count", "visual_baseline_sha256",
+        "layout_check_duration_ms", "os", "font_set_sha256", "font_file_count",
+        "visual_baseline_sha256",
         "settings", "pages", "verdict",
     }
     if set(proof) != expected:
@@ -217,7 +218,11 @@ def validate_proof(proof: dict[str, Any]) -> None:
     ):
         if not _is_sha256(proof.get(key)):
             raise ValueError(f"layout proof {key} must be lowercase SHA-256")
-    for key in ("conversion_duration_ms", "application_elapsed_ms"):
+    for key in (
+        "conversion_duration_ms",
+        "application_elapsed_ms",
+        "layout_check_duration_ms",
+    ):
         value = proof.get(key)
         if (
             not isinstance(value, (int, float))
@@ -225,6 +230,9 @@ def validate_proof(proof: dict[str, Any]) -> None:
             or float(value) < 0
         ):
             raise ValueError(f"layout proof {key} must be non-negative")
+    for key in ("app_version", "converter_version", "os"):
+        if not isinstance(proof.get(key), str) or not proof[key].strip():
+            raise ValueError(f"layout proof {key} must be non-empty")
     if not isinstance(proof.get("font_file_count"), int) or proof["font_file_count"] <= 0:
         raise ValueError("layout proof font_file_count must be positive")
     if not isinstance(proof.get("pages"), list) or not proof["pages"]:
@@ -317,6 +325,7 @@ def build_proof(
         pages = _rasterize(pdf_path, temp / "pages", dpi)
         observed_pages = _verify_pages(pages, expected_pages, tolerance)
 
+        layout_check_duration_ms = (time.monotonic() - started) * 1000.0
         proof = {
             "schema": PROOF_SCHEMA,
             "producer": PRODUCER,
@@ -337,6 +346,7 @@ def build_proof(
             "converter_version": evidence["converter_version"].strip(),
             "conversion_duration_ms": float(conversion_ms),
             "application_elapsed_ms": application_elapsed_ms,
+            "layout_check_duration_ms": layout_check_duration_ms,
             "os": platform.platform(),
             "font_set_sha256": font_set_sha256,
             "font_file_count": font_file_count,

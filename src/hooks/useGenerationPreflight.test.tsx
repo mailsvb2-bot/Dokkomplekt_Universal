@@ -243,6 +243,32 @@ describe('useGenerationPreflight', () => {
     expect(onConfirmed).not.toHaveBeenCalled();
   });
 
+  it('serializes rapid Create and Ctrl+Enter entry before the first backend plan returns', async () => {
+    const readyPlan: WorkflowPlan = { document_id: 'contract', prompts: [], blocked: false, block_reasons: [] };
+    let releasePlan!: (plan: WorkflowPlan) => void;
+    const firstPlan = new Promise<WorkflowPlan>((resolve) => { releasePlan = resolve; });
+    const requestWorkflowPlan = vi.fn()
+      .mockImplementationOnce(async () => firstPlan)
+      .mockResolvedValue(readyPlan);
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['contract'], ...context('contract'), preflightPlan: readyPlan,
+      preflightLoading: false, answers: {}, skippedAnswers: {},
+      setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
+      setStatus: vi.fn(), requestWorkflowPlan, applyAnswers: vi.fn(async () => null), onConfirmed,
+    }));
+    let first!: Promise<void>;
+    await act(async () => { first = result.current.openGenerationPreflight(); await Promise.resolve(); });
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    expect(requestWorkflowPlan).toHaveBeenCalledTimes(1);
+    expect(onConfirmed).not.toHaveBeenCalled();
+    releasePlan(readyPlan);
+    await act(async () => { await first; });
+    // One initial read + one independent commit-boundary refresh, not two runs.
+    expect(requestWorkflowPlan).toHaveBeenCalledTimes(2);
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a duplicate confirm while one generation is already in flight', async () => {
     const readyPlan: WorkflowPlan = { document_id: 'contract', prompts: [], blocked: false, block_reasons: [] };
     let release!: () => void;

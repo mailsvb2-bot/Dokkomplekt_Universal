@@ -49,6 +49,7 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [generationValidationFieldId, setGenerationValidationFieldId] = useState<string | null>(null);
   const confirmationInFlight = useRef(false);
+  const openingInFlight = useRef(false);
 
   useEffect(() => {
     function onGenerationShortcut(event: KeyboardEvent) {
@@ -66,10 +67,14 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       options.setStatus('Отметьте хотя бы один документ для комплекта.');
       return;
     }
-    if (options.preflightLoading || confirmationInFlight.current) {
+    if (options.preflightLoading || openingInFlight.current || confirmationInFlight.current) {
       options.setStatus('Подождите: программа ещё проверяет выбранный комплект.');
       return;
     }
+    // Claim synchronously, before the first IPC await: a double-click or Ctrl+Enter
+    // must never schedule two independent read-back / publication journeys.
+    openingInFlight.current = true;
+    try {
     setGenerationError(null);
     setGenerationValidationFieldId(null);
     options.setStatus('Проверяем финальный план выбранного комплекта…');
@@ -170,6 +175,9 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       setGenerationSnapshot(null);
     } finally {
       confirmationInFlight.current = false;
+    }
+    } finally {
+      openingInFlight.current = false;
     }
   }
 

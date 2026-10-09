@@ -239,7 +239,7 @@ describe('Полный прогон пользовательских сцена�
     installMock(calls, { saveStateFailure: true });
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
-    fireEvent.click(screen.getByText('Расширенные инструменты'));
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки' }));
     await click(/Сохранить сессию/);
     await waitFor(() => expect(calls.some((call) => call.command === 'save_state')).toBe(true));
     await screen.findByText(/state database write denied/);

@@ -237,6 +237,7 @@ describe('useUpdateLifecycle', () => {
     await act(async () => {
       releaseCheck({
         available: true, current_version: '18.4.7', latest_version: '18.4.8',
+        platform: 'windows-x86_64', message: 'Доступно обновление',
         verified_package_path: 'C:/updates/signed.exe', sha256: 'b'.repeat(64), size_bytes: 1024,
       });
       await first;
@@ -257,6 +258,7 @@ describe('useUpdateLifecycle', () => {
       if (command === 'check_for_updates') {
         return {
           available: true, current_version: '18.4.7', latest_version: '18.4.8',
+          platform: 'windows-x86_64', message: 'Доступно обновление',
           verified_package_path: 'C:/updates/signed.exe', sha256: 'c'.repeat(64), size_bytes: 1024,
         } as never;
       }
@@ -283,7 +285,10 @@ describe('useUpdateLifecycle', () => {
       if (command === 'check_for_updates') {
         checks += 1;
         if (checks === 1) throw new Error('network unavailable');
-        return { available: false, current_version: '18.4.7', message: 'Актуально' } as never;
+        return {
+          available: false, current_version: '18.4.7', latest_version: '18.4.7',
+          platform: 'windows-x86_64', message: 'Актуально',
+        } as never;
       }
       throw new Error(`unexpected command ${command}`);
     });
@@ -306,7 +311,10 @@ describe('useUpdateLifecycle', () => {
     __setInvokeForTests(async (command) => {
       if (command === 'get_update_recovery_status') return recovery as never;
       if (command === 'check_for_updates') {
-        return { available: false, current_version: '18.4.7', message: 'Актуально' } as never;
+        return {
+          available: false, current_version: '18.4.7', latest_version: '18.4.7',
+          platform: 'windows-x86_64', message: 'Актуально',
+        } as never;
       }
       throw new Error(`unexpected command ${command}`);
     });

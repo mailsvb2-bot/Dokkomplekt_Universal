@@ -1095,7 +1095,16 @@ function AppContent() {
     const current = guidedScanner;
     if (!current) return;
     if (!current.capture?.document_closed) {
-      await run('close_word_scanner', () => closeWordScanner(current.session.session_id, current.target.mode === 'template'));
+      let closeError: string | null = null;
+      const closed = await run(
+        'close_word_scanner',
+        () => closeWordScanner(current.session.session_id, current.target.mode === 'template'),
+        (detail) => { closeError = detail; },
+      );
+      if (!closed) {
+        setStatus(`Не удалось закрыть сеанс Word-сканера${closeError ? `: ${closeError}` : '.'} Повторите закрытие; сеанс сохранён.`);
+        return;
+      }
     }
     setGuidedScanner(null);
     setStatus(current.target.mode === 'template'

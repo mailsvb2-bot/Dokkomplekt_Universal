@@ -21,6 +21,7 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
+import { closeGuidedScannerSafely } from './lib/guidedScannerShutdown';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useUpdateLifecycle } from './hooks/useUpdateLifecycle';
@@ -1094,21 +1095,11 @@ function AppContent() {
   async function cancelGuidedScanner() {
     const current = guidedScanner;
     if (!current) return;
-    if (!current.capture?.document_closed) {
-      let closeError: string | null = null;
-      const closed = await run(
-        'close_word_scanner',
-        () => closeWordScanner(current.session.session_id, current.target.mode === 'template'),
-        (detail) => { closeError = detail; },
-      );
-      if (!closed) {
-        setStatus(`Не удалось закрыть сеанс Word-сканера${closeError ? `: ${closeError}` : '.'} Повторите закрытие; сеанс сохранён.`);
-        return;
-      }
-    }
+    const closed = await closeGuidedScannerSafely(current, (id, discardCopy, onError) =>
+      run('close_word_scanner', () => closeWordScanner(id, discardCopy), onError), setStatus);
+    if (!closed) return;
     setGuidedScanner(null);
-    setStatus(current.target.mode === 'template'
-      ? 'Разметка отменена. Безопасная копия удалена, исходный шаблон не изменён.'
+    setStatus(current.target.mode === 'template' ? 'Разметка отменена. Безопасная копия удалена, исходный шаблон не изменён.'
       : 'Сканер закрыт. Исходный документ не изменён.');
   }
 

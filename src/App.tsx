@@ -1197,8 +1197,13 @@ function AppContent() {
     setStatus(`Разметка сохранена: принято ${res.applied_fields.length}, пропущено ${res.rejected_fields.length}.`);
   }
   async function saveSession() {
-    await run('save_state', () => saveState(STATE_DB));
-    setStatus('Настройки и текущий набор сохранены.');
+    // save_state returns void on success; use an explicit success sentinel so
+    // rejected IPC cannot be reported as saved to the user.
+    const saved = await run('save_state', async () => {
+      await saveState(STATE_DB);
+      return true;
+    });
+    if (saved) setStatus('Настройки и текущий набор сохранены.');
   }
   async function loadSession() {
     const res = await run('load_state', () => loadState(STATE_DB));

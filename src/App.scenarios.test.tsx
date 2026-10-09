@@ -12,7 +12,7 @@ const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secon
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, skippable: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
-function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number; renderFailureOnCall?: number } = {}) {
+function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number; renderFailureOnCall?: number; saveStateFailure?: boolean } = {}) {
   const bundleMode = options.bundleMode ?? 'auto';
   let firstRunFailures = options.firstRunFailures ?? 0;
   let renderBatchCallCount = 0;
@@ -161,6 +161,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'route_intake':
         return { should_start_ui: false, should_raise_existing_window: true, reason: 'raise existing window' } as never;
       case 'save_state':
+        if (options.saveStateFailure) throw new Error('state database write denied');
         return undefined as never;
       case 'validate_product_access':
         return { accepted: true, mode: 'vip', plan: 'vip', reason: 'ok', watermark: null, document_limit_month: 1000, max_documents_per_run: 50 } as never;
@@ -232,6 +233,18 @@ describe('Полный прогон пользовательских сцена�
     localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
   });
   afterEach(() => { localStorage.clear(); __resetInvokeForTests(); vi.restoreAllMocks(); });
+
+  it('never claims settings were saved when the backend rejects save_state', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { saveStateFailure: true });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+    fireEvent.click(screen.getByText('Расширенные инструменты'));
+    await click(/Сохранить сессию/);
+    await waitFor(() => expect(calls.some((call) => call.command === 'save_state')).toBe(true));
+    await screen.findByText(/state database write denied/);
+    expect(screen.queryByText('Настройки и текущий набор сохранены.')).toBeNull();
+  });
 
   it('каждый пользовательский сценарий вызывает соответствующую Rust-команду', async () => {
     const calls: Call[] = [];

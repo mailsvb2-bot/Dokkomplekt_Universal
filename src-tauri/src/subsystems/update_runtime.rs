@@ -455,8 +455,25 @@ fn download_and_verify_update(
     Ok(final_path)
 }
 
+// The actual signed package is a shared file across every renderer/window.
+// Serialize check/download and apply so one IPC cannot replace a verified
+// package while another IPC is preparing its installer and recovery backup.
+static UPDATE_OPERATION_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_update_operation() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    UPDATE_OPERATION_LOCK.try_lock().map_err(|error| match error {
+        std::sync::TryLockError::WouldBlock => {
+            "Проверка или установка обновления уже выполняется.".to_string()
+        }
+        std::sync::TryLockError::Poisoned(_) => {
+            "Механизм обновления заблокирован после ошибки. Перезапустите программу.".to_string()
+        }
+    })
+}
+
 #[tauri::command]
 fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateCheckResponse, String> {
+    let _update_guard = lock_update_operation()?;
     let manifest_url = validate_update_url(TRUSTED_UPDATE_MANIFEST_URL)?;
     let client = pinned_update_client(&manifest_url)?;
     let manifest_bytes = fetch_limited_bytes(&client, &manifest_url, MAX_UPDATE_MANIFEST_BYTES)?;
@@ -1379,6 +1396,7 @@ fn apply_verified_update(
     sha256: String,
     size_bytes: u64,
 ) -> Result<UpdateApplyResponse, String> {
+    let _update_guard = lock_update_operation()?;
     let _persistence_guard = state
         .persistence_gate
         .lock()
@@ -1538,6 +1556,18 @@ fn apply_verified_update(
 #[cfg(test)]
 mod fpr19_update_lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn update_operation_gate_blocks_overlap_and_releases_for_retry() {
+        let first = lock_update_operation().expect("first update must claim the gate");
+        let error = match lock_update_operation() {
+            Ok(_) => panic!("concurrent update unexpectedly bypassed the gate"),
+            Err(error) => error,
+        };
+        assert!(error.contains("уже выполняется"), "{error}");
+        drop(first);
+        let _retry = lock_update_operation().expect("the released gate permits a retry");
+    }
 
     fn owned_backup_fixture(
         root: &Path,

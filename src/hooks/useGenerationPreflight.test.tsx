@@ -243,6 +243,42 @@ describe('useGenerationPreflight', () => {
     expect(onConfirmed).not.toHaveBeenCalled();
   });
 
+  it('Ctrl+Enter binds the current selection and output destination even when the document count stays the same', async () => {
+    const readyPlan: WorkflowPlan = { document_id: 'batch', prompts: [], blocked: false, block_reasons: [] };
+    const requestWorkflowPlan = vi.fn(async (_snapshot: GenerationSnapshot) => readyPlan);
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
+    let documentIds = ['old-document'];
+    let outputRoot = 'C:/Old';
+    const { rerender } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: documentIds,
+      ...context(documentIds[0]),
+      outputRoot,
+      preflightPlan: readyPlan,
+      preflightLoading: false,
+      answers: {},
+      skippedAnswers: {},
+      setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
+      setStatus: vi.fn(),
+      requestWorkflowPlan,
+      applyAnswers: vi.fn(async () => null),
+      onConfirmed,
+    }));
+
+    documentIds = ['new-document'];
+    outputRoot = 'D:/New';
+    rerender();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+    });
+    expect(requestWorkflowPlan).toHaveBeenCalledWith(expect.objectContaining({
+      documentIds: ['new-document'], outputRoot: 'D:/New',
+    }));
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
+    expect(onConfirmed).toHaveBeenCalledWith(expect.objectContaining({
+      documentIds: ['new-document'], outputRoot: 'D:/New',
+    }));
+  });
+
   it('serializes rapid Create and Ctrl+Enter entry before the first backend plan returns', async () => {
     const readyPlan: WorkflowPlan = { document_id: 'contract', prompts: [], blocked: false, block_reasons: [] };
     let releasePlan!: (plan: WorkflowPlan) => void;

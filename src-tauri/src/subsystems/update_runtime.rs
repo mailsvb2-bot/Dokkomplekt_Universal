@@ -461,7 +461,9 @@ fn download_and_verify_update(
 static UPDATE_OPERATION_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_update_operation() -> Result<std::sync::MutexGuard<'static, ()>, String> {
-    UPDATE_OPERATION_LOCK.try_lock().map_err(|error| match error {
+    UPDATE_OPERATION_LOCK
+        .try_lock()
+        .map_err(|error| match error {
         std::sync::TryLockError::WouldBlock => {
             "Проверка или установка обновления уже выполняется.".to_string()
         }

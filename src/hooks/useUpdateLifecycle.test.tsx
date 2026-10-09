@@ -209,4 +209,120 @@ describe('useUpdateLifecycle', () => {
       'Доступна версия 18.4.8, но проверенный пакет неполон. Установка не запущена.',
     );
   });
+
+  it('serializes rapid update clicks before the verified package check resolves', async () => {
+    const calls: Call[] = [];
+    const setStatus = vi.fn();
+    const confirm = vi.fn(async () => true);
+    let releaseCheck!: (value: unknown) => void;
+    const pendingCheck = new Promise<unknown>((resolve) => { releaseCheck = resolve; });
+    __setInvokeForTests(async (command, payload) => {
+      calls.push({ command, payload });
+      if (command === 'get_update_recovery_status') return null as never;
+      if (command === 'check_for_updates') return pendingCheck as never;
+      if (command === 'apply_verified_update') return { message: 'Installer launched.' } as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { result } = renderHook(() => useUpdateLifecycle({
+      workspaceStateReady: true, run: runAction, setStatus, confirm,
+    }));
+    let first!: Promise<void>;
+    await act(async () => {
+      first = result.current.checkAndApplyUpdate();
+      await result.current.checkAndApplyUpdate();
+    });
+    expect(calls.filter((call) => call.command === 'check_for_updates')).toHaveLength(1);
+    expect(setStatus).toHaveBeenCalledWith('Проверка или установка обновления уже выполняется.');
+
+    await act(async () => {
+      releaseCheck({
+        available: true, current_version: '18.4.7', latest_version: '18.4.8',
+        verified_package_path: 'C:/updates/signed.exe', sha256: 'b'.repeat(64), size_bytes: 1024,
+      });
+      await first;
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(calls.filter((call) => call.command === 'apply_verified_update')).toHaveLength(1);
+  });
+
+  it('keeps the update lock while the user confirmation remains open', async () => {
+    const calls: Call[] = [];
+    const setStatus = vi.fn();
+    let finishConfirmation!: (value: boolean) => void;
+    const confirmation = new Promise<boolean>((resolve) => { finishConfirmation = resolve; });
+    const confirm = vi.fn(async () => confirmation);
+    __setInvokeForTests(async (command, payload) => {
+      calls.push({ command, payload });
+      if (command === 'get_update_recovery_status') return null as never;
+      if (command === 'check_for_updates') {
+        return {
+          available: true, current_version: '18.4.7', latest_version: '18.4.8',
+          verified_package_path: 'C:/updates/signed.exe', sha256: 'c'.repeat(64), size_bytes: 1024,
+        } as never;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { result } = renderHook(() => useUpdateLifecycle({
+      workspaceStateReady: true, run: runAction, setStatus, confirm,
+    }));
+    let first!: Promise<void>;
+    await act(async () => { first = result.current.checkAndApplyUpdate(); });
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    await act(async () => { await result.current.checkAndApplyUpdate(); });
+    expect(calls.filter((call) => call.command === 'check_for_updates')).toHaveLength(1);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    await act(async () => { finishConfirmation(false); await first; });
+    expect(calls.some((call) => call.command === 'apply_verified_update')).toBe(false);
+  });
+
+  it('releases the update lock after backend failure so a manual retry can succeed', async () => {
+    let checks = 0;
+    const setStatus = vi.fn();
+    __setInvokeForTests(async (command) => {
+      if (command === 'get_update_recovery_status') return null as never;
+      if (command === 'check_for_updates') {
+        checks += 1;
+        if (checks === 1) throw new Error('network unavailable');
+        return { available: false, current_version: '18.4.7', message: 'Актуально' } as never;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { result } = renderHook(() => useUpdateLifecycle({
+      workspaceStateReady: true, run: runAction, setStatus,
+      confirm: vi.fn(async () => false),
+    }));
+    await act(async () => {
+      await result.current.checkAndApplyUpdate();
+      await result.current.checkAndApplyUpdate();
+    });
+    expect(checks).toBe(2);
+    expect(setStatus).toHaveBeenLastCalledWith('Актуально: 18.4.7.');
+  });
+
+  it('does not overwrite a new check outcome with a delayed startup recovery result', async () => {
+    const setStatus = vi.fn();
+    let finishRecovery!: (value: unknown) => void;
+    const recovery = new Promise<unknown>((resolve) => { finishRecovery = resolve; });
+    __setInvokeForTests(async (command) => {
+      if (command === 'get_update_recovery_status') return recovery as never;
+      if (command === 'check_for_updates') {
+        return { available: false, current_version: '18.4.7', message: 'Актуально' } as never;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { result } = renderHook(() => useUpdateLifecycle({
+      workspaceStateReady: true, run: runAction, setStatus,
+      confirm: vi.fn(async () => false),
+    }));
+    await act(async () => { await result.current.checkAndApplyUpdate(); });
+    await act(async () => {
+      finishRecovery({ status: 'verified', target_version: '18.4.6' });
+      await recovery;
+    });
+    expect(setStatus).toHaveBeenLastCalledWith('Актуально: 18.4.7.');
+    expect(setStatus).not.toHaveBeenCalledWith(
+      'Обновление до версии 18.4.6 установлено и локальное состояние проверено.',
+    );
+  });
+
 });

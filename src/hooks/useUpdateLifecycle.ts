@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { applyVerifiedUpdate, checkForUpdates, getUpdateRecoveryStatus } from '../lib/api';
 import { actionErrorMessage } from './useActionRunner';
 
@@ -28,12 +28,16 @@ export function useUpdateLifecycle({
   setStatus,
   confirm,
 }: UseUpdateLifecycleOptions) {
+  const updateInFlight = useRef(false);
+  const updateFlowRevision = useRef(0);
+
   useEffect(() => {
     if (!workspaceStateReady) return;
     let alive = true;
+    const recoveryRevision = updateFlowRevision.current;
     void getUpdateRecoveryStatus()
       .then((recovery) => {
-        if (!alive || !recovery) return;
+        if (!alive || !recovery || updateFlowRevision.current !== recoveryRevision) return;
         if (recovery.status === 'verified') {
           setStatus(`Обновление до версии ${recovery.target_version} установлено и локальное состояние проверено.`);
         } else if (recovery.status === 'rolled_back') {
@@ -47,7 +51,7 @@ export function useUpdateLifecycle({
         }
       })
       .catch((error) => {
-        if (!alive) return;
+        if (!alive || updateFlowRevision.current !== recoveryRevision) return;
         const detail = actionErrorMessage(error);
         setStatus(`Не удалось проверить состояние восстановления обновления: ${detail}. Рабочий набор остаётся доступен; проверку обновления можно повторить вручную.`);
       });
@@ -57,6 +61,22 @@ export function useUpdateLifecycle({
   }, [workspaceStateReady, setStatus]);
 
   async function checkAndApplyUpdate() {
+    // One user action owns the whole update journey: download, review, and installer.
+    if (updateInFlight.current) {
+      setStatus('Проверка или установка обновления уже выполняется.');
+      return;
+    }
+    updateInFlight.current = true;
+    // Ignore delayed startup recovery messages after a newer user-driven result.
+    updateFlowRevision.current += 1;
+    try {
+      await checkAndApplyUpdateOnce();
+    } finally {
+      updateInFlight.current = false;
+    }
+  }
+
+  async function checkAndApplyUpdateOnce() {
     const result = await run('check_for_updates', () => checkForUpdates());
     if (!result) return;
     if (!result.available) {

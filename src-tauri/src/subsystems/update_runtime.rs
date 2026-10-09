@@ -455,8 +455,69 @@ fn download_and_verify_update(
     Ok(final_path)
 }
 
+// The verified installer is a shared file: serialize check/download and apply
+// across renderers and independently launched application processes.
+static UPDATE_OPERATION_LOCK: Mutex<()> = Mutex::new(());
+const UPDATE_OPERATION_LOCK_FILE: &str = ".dokkomplekt-update.lock";
+
+struct UpdateOperationGuard {
+    _process: std::sync::MutexGuard<'static, ()>,
+    // Dropping the file handle releases the platform's cross-process lock.
+    _file: std::fs::File,
+}
+
+fn lock_update_operation_process() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    UPDATE_OPERATION_LOCK
+        .try_lock()
+        .map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => {
+                "Проверка или установка обновления уже выполняется.".to_string()
+            }
+            std::sync::TryLockError::Poisoned(_) => {
+                "Механизм обновления заблокирован после ошибки. Перезапустите программу.".to_string()
+            }
+        })
+}
+
+fn lock_update_operation_file(path: &Path) -> Result<std::fs::File, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_file() || crate::publication_metadata_is_link_or_reparse(&metadata) {
+                return Err("Файл блокировки обновления имеет небезопасный тип".to_string());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Не удалось проверить блокировку обновления: {error}")),
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|error| format!("Не удалось открыть блокировку обновления: {error}"))?;
+    fs2::FileExt::try_lock_exclusive(&file).map_err(|_| {
+        "Проверка или установка обновления уже выполняется в другом экземпляре программы."
+            .to_string()
+    })?;
+    Ok(file)
+}
+
+fn lock_update_operation(app: &tauri::AppHandle) -> Result<UpdateOperationGuard, String> {
+    let process = lock_update_operation_process()?;
+    let root = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&root)
+        .map_err(|error| format!("Не удалось подготовить каталог обновления: {error}"))?;
+    let file = lock_update_operation_file(&root.join(UPDATE_OPERATION_LOCK_FILE))?;
+    Ok(UpdateOperationGuard {
+        _process: process,
+        _file: file,
+    })
+}
+
 #[tauri::command]
 fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateCheckResponse, String> {
+    let _update_guard = lock_update_operation(&app)?;
     let manifest_url = validate_update_url(TRUSTED_UPDATE_MANIFEST_URL)?;
     let client = pinned_update_client(&manifest_url)?;
     let manifest_bytes = fetch_limited_bytes(&client, &manifest_url, MAX_UPDATE_MANIFEST_BYTES)?;
@@ -1379,6 +1440,7 @@ fn apply_verified_update(
     sha256: String,
     size_bytes: u64,
 ) -> Result<UpdateApplyResponse, String> {
+    let _update_guard = lock_update_operation(&app)?;
     let _persistence_guard = state
         .persistence_gate
         .lock()
@@ -1538,6 +1600,37 @@ fn apply_verified_update(
 #[cfg(test)]
 mod fpr19_update_lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn update_operation_gate_blocks_overlap_and_releases_for_retry() {
+        let first = lock_update_operation_process().expect("first update must claim the gate");
+        let error = match lock_update_operation_process() {
+            Ok(_) => panic!("concurrent update unexpectedly bypassed the gate"),
+            Err(error) => error,
+        };
+        assert!(error.contains("уже выполняется"), "{error}");
+        drop(first);
+        let _retry = lock_update_operation_process().expect("the released gate permits a retry");
+    }
+
+    #[test]
+    fn update_operation_file_rejects_second_process_handle_until_release() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-update-operation-lock-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(UPDATE_OPERATION_LOCK_FILE);
+        let first = lock_update_operation_file(&path).unwrap();
+        assert!(
+            lock_update_operation_file(&path).is_err(),
+            "independent file handles must not simultaneously own the update lock"
+        );
+        drop(first);
+        let retry = lock_update_operation_file(&path).unwrap();
+        drop(retry);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     fn owned_backup_fixture(
         root: &Path,

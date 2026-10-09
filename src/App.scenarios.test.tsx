@@ -259,6 +259,7 @@ describe('Полный прогон пользовательских сцена�
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     fireEvent.click(screen.getByRole('button', { name: 'Настройки' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Экспертные и административные инструменты' }));
     await click(/Сохранить сессию/);
     await waitFor(() => expect(calls.some((call) => call.command === 'save_state')).toBe(true));
     await screen.findByText(/state database write denied/);

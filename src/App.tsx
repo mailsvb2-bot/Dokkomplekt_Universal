@@ -21,6 +21,7 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
+import { closeGuidedScannerSafely } from './lib/guidedScannerShutdown';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useUpdateLifecycle } from './hooks/useUpdateLifecycle';
@@ -1094,12 +1095,11 @@ function AppContent() {
   async function cancelGuidedScanner() {
     const current = guidedScanner;
     if (!current) return;
-    if (!current.capture?.document_closed) {
-      await run('close_word_scanner', () => closeWordScanner(current.session.session_id, current.target.mode === 'template'));
-    }
+    const closed = await closeGuidedScannerSafely(current, (id, discardCopy, onError) =>
+      run('close_word_scanner', () => closeWordScanner(id, discardCopy), onError), setStatus);
+    if (!closed) return;
     setGuidedScanner(null);
-    setStatus(current.target.mode === 'template'
-      ? 'Разметка отменена. Безопасная копия удалена, исходный шаблон не изменён.'
+    setStatus(current.target.mode === 'template' ? 'Разметка отменена. Безопасная копия удалена, исходный шаблон не изменён.'
       : 'Сканер закрыт. Исходный документ не изменён.');
   }
 
@@ -1197,8 +1197,13 @@ function AppContent() {
     setStatus(`Разметка сохранена: принято ${res.applied_fields.length}, пропущено ${res.rejected_fields.length}.`);
   }
   async function saveSession() {
-    await run('save_state', () => saveState(STATE_DB));
-    setStatus('Настройки и текущий набор сохранены.');
+    // save_state returns void on success; use an explicit success sentinel so
+    // rejected IPC cannot be reported as saved to the user.
+    const saved = await run('save_state', async () => {
+      await saveState(STATE_DB);
+      return true;
+    });
+    if (saved) setStatus('Настройки и текущий набор сохранены.');
   }
   async function loadSession() {
     const res = await run('load_state', () => loadState(STATE_DB));

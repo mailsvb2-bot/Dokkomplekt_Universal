@@ -24,7 +24,13 @@ export function useDocumentSelectionPersistence(options: DocumentSelectionPersis
       .then(async () => {
         const persisted = await setDocumentSelection(requested);
         if (persisted.length !== requested.length || persisted.some((id, index) => id !== requested[index])) {
-          options.setSelectedDocumentIds(persisted);
+          // Responses are serialized for the SQLite store, but React selection can
+          // change while an older IPC call is pending. Never clobber a later click.
+          options.setSelectedDocumentIds((current) => (
+            current.length === requested.length && current.every((id, index) => id === requested[index])
+              ? persisted
+              : current
+          ));
         }
       })
       .catch((reason) => {

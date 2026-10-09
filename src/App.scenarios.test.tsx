@@ -12,7 +12,7 @@ const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secon
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, skippable: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
-function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number; renderFailureOnCall?: number } = {}) {
+function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number; renderFailureOnCall?: number; saveStateFailure?: boolean; scannerCloseFailure?: boolean } = {}) {
   const bundleMode = options.bundleMode ?? 'auto';
   let firstRunFailures = options.firstRunFailures ?? 0;
   let renderBatchCallCount = 0;
@@ -140,7 +140,9 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'activate_word_scanner': return true as never;
       case 'capture_word_scanner': { const req=(payload as {req?:{session_id?:string;close_after_capture?:boolean}})?.req; return { session_id: req?.session_id ?? 'scan-source', selected_text: '148', context_text: 'Счёт № 148', before_text: 'Счёт № ', after_text: '', selection_start: 7, selection_end: 10, expanded_from_cursor: false, document_path: 'source.docx', document_closed: Boolean(req?.close_after_capture) } as never; }
       case 'apply_word_scanner_selection': return { session_id: 'scan-template', output_path: 'guided-copy.docx', selected_text: '148', placeholder: '{{accounting.invoice_number}}', extracted_text: 'Счёт № {{accounting.invoice_number}}', document_closed: true } as never;
-      case 'close_word_scanner': return true as never;
+      case 'close_word_scanner':
+        if (options.scannerCloseFailure) throw new Error('Word refuses to close');
+        return true as never;
       case 'save_learned_scanner_rule': return [] as never;
       case 'list_learned_scanner_rules': return [{ rule_id: 'rule-1', field_id: 'document.number', title: 'Номер документа', label_hint: 'Номер', before_text: '№ ', after_text: '', sample_value: '148', input_kind: 'text', created_at: '2026-08-01', learning_status: 'promoted', successful_applications: 3 }] as never;
       case 'delete_learned_scanner_rule': return [] as never;
@@ -161,6 +163,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'route_intake':
         return { should_start_ui: false, should_raise_existing_window: true, reason: 'raise existing window' } as never;
       case 'save_state':
+        if (options.saveStateFailure) throw new Error('state database write denied');
         return undefined as never;
       case 'validate_product_access':
         return { accepted: true, mode: 'vip', plan: 'vip', reason: 'ok', watermark: null, document_limit_month: 1000, max_documents_per_run: 50 } as never;
@@ -232,6 +235,36 @@ describe('Полный прогон пользовательских сцена�
     localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
   });
   afterEach(() => { localStorage.clear(); __resetInvokeForTests(); vi.restoreAllMocks(); });
+
+  it('retains the guided Scanner modal if Word close fails instead of reporting a successful cancellation', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { scannerCloseFailure: true });
+    render(<App />);
+    const pickSource = await screen.findByRole('button', { name: 'Выбрать исходный файл' });
+    fireEvent.click(pickSource);
+    await waitFor(() => expect(calls.some((call) => call.command === 'parse_source_path')).toBe(true));
+    fireEvent.click(screen.getByText('Расширенные инструменты'));
+    await click(/Показать значение в Word/);
+    const scanner = await screen.findByRole('dialog', { name: 'Простой сканер мышью' });
+    fireEvent.click(within(scanner).getByRole('button', { name: /Отмена — всё закрыть/ }));
+    await waitFor(() => expect(calls.some((call) => call.command === 'close_word_scanner')).toBe(true));
+    await screen.findByText(/Word refuses to close/);
+    expect(screen.getByRole('dialog', { name: 'Простой сканер мышью' })).toBeTruthy();
+    expect(screen.queryByText('Сканер закрыт. Исходный документ не изменён.')).toBeNull();
+  });
+
+  it('never claims settings were saved when the backend rejects save_state', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { saveStateFailure: true });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Экспертные и административные инструменты' }));
+    await click(/Сохранить сессию/);
+    await waitFor(() => expect(calls.some((call) => call.command === 'save_state')).toBe(true));
+    await screen.findByText(/state database write denied/);
+    expect(screen.queryByText('Настройки и текущий набор сохранены.')).toBeNull();
+  });
 
   it('каждый пользовательский сценарий вызывает соответствующую Rust-команду', async () => {
     const calls: Call[] = [];

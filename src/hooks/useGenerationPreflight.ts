@@ -49,6 +49,7 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [generationValidationFieldId, setGenerationValidationFieldId] = useState<string | null>(null);
   const confirmationInFlight = useRef(false);
+  const openingInFlight = useRef(false);
 
   useEffect(() => {
     function onGenerationShortcut(event: KeyboardEvent) {
@@ -59,17 +60,23 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     }
     document.addEventListener('keydown', onGenerationShortcut);
     return () => document.removeEventListener('keydown', onGenerationShortcut);
-  }, [generationPreflightOpen, options.preflightLoading, options.selectedDocumentIds.length, options.shortcutEnabled]);
+  // The keyboard handler must use the entire current generation snapshot. A
+  // same-count document switch or output-folder change must not submit old inputs.
+  }, [generationPreflightOpen, options]);
 
   async function openGenerationPreflight() {
     if (!options.selectedDocumentIds.length) {
       options.setStatus('Отметьте хотя бы один документ для комплекта.');
       return;
     }
-    if (options.preflightLoading || confirmationInFlight.current) {
+    if (options.preflightLoading || openingInFlight.current || confirmationInFlight.current) {
       options.setStatus('Подождите: программа ещё проверяет выбранный комплект.');
       return;
     }
+    // Claim synchronously, before the first IPC await: a double-click or Ctrl+Enter
+    // must never schedule two independent read-back / publication journeys.
+    openingInFlight.current = true;
+    try {
     setGenerationError(null);
     setGenerationValidationFieldId(null);
     options.setStatus('Проверяем финальный план выбранного комплекта…');
@@ -170,6 +177,9 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       setGenerationSnapshot(null);
     } finally {
       confirmationInFlight.current = false;
+    }
+    } finally {
+      openingInFlight.current = false;
     }
   }
 

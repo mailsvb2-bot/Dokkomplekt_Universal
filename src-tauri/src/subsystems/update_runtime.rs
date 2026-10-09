@@ -488,7 +488,6 @@ fn lock_update_operation_file(path: &Path) -> Result<std::fs::File, String> {
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(format!("Не удалось проверить блокировку обновления: {error}")),
-        _ => {}
     }
     let file = std::fs::OpenOptions::new()
         .read(true)

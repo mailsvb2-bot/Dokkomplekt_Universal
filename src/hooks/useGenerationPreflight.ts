@@ -60,7 +60,9 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     }
     document.addEventListener('keydown', onGenerationShortcut);
     return () => document.removeEventListener('keydown', onGenerationShortcut);
-  }, [generationPreflightOpen, options.preflightLoading, options.selectedDocumentIds.length, options.shortcutEnabled]);
+  // The keyboard handler must use the entire current generation snapshot. A
+  // same-count document switch or output-folder change must not submit old inputs.
+  }, [generationPreflightOpen, options]);
 
   async function openGenerationPreflight() {
     if (!options.selectedDocumentIds.length) {

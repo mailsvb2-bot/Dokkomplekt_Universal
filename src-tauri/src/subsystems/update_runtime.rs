@@ -481,11 +481,10 @@ fn lock_update_operation_process() -> Result<std::sync::MutexGuard<'static, ()>,
 
 fn lock_update_operation_file(path: &Path) -> Result<std::fs::File, String> {
     match std::fs::symlink_metadata(path) {
-        Ok(metadata)
-            if !metadata.is_file()
-                || crate::publication_metadata_is_link_or_reparse(&metadata) =>
-        {
-            return Err("Файл блокировки обновления имеет небезопасный тип".to_string());
+        Ok(metadata) => {
+            if !metadata.is_file() || crate::publication_metadata_is_link_or_reparse(&metadata) {
+                return Err("Файл блокировки обновления имеет небезопасный тип".to_string());
+            }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(format!("Не удалось проверить блокировку обновления: {error}")),
@@ -495,6 +494,7 @@ fn lock_update_operation_file(path: &Path) -> Result<std::fs::File, String> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)
         .map_err(|error| format!("Не удалось открыть блокировку обновления: {error}"))?;
     fs2::FileExt::try_lock_exclusive(&file).map_err(|_| {

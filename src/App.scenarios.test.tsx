@@ -236,6 +236,32 @@ describe('Полный прогон пользовательских сцена�
   });
   afterEach(() => { localStorage.clear(); __resetInvokeForTests(); vi.restoreAllMocks(); });
 
+  it('never creates a DOCX for unparsed edited text or a stale source review', async () => {
+    const calls: Call[] = [];
+    installMock(calls);
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    const sourceText = screen.getByPlaceholderText('Вставьте текст источника');
+    fireEvent.change(sourceText, { target: { value: 'Счёт № 148' } });
+    // Ctrl+Enter must not ask the backend to generate using the previous case.
+    fireEvent.keyDown(document, { key: 'Enter', ctrlKey: true });
+    expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Использовать текст' }));
+    await waitFor(() => expect(calls.some((call) => call.command === 'parse_source')).toBe(true));
+    const createButton = await screen.findByRole('button', { name: /Проверить и создать \(2\)/ });
+    await waitFor(() => expect((createButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(createButton);
+    const review = await screen.findByRole('dialog', { name: /Проверка данных|Проверить|Создание|Комплект/i });
+    // Editing the visible source invalidates the previously accepted backend case.
+    fireEvent.change(sourceText, { target: { value: 'Другой пациент, № 999' } });
+    fireEvent.click(within(review).getByRole('button', { name: 'Создать документы' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Проверка данных|Проверить|Создание|Комплект/i })).toBeNull());
+    expect(calls.filter((call) => call.command === 'render_docx_batch')).toHaveLength(0);
+    expect(screen.getByText(/Исходник изменился или ещё не распознан/)).toBeTruthy();
+  });
+
   it('retains the guided Scanner modal if Word close fails instead of reporting a successful cancellation', async () => {
     const calls: Call[] = [];
     installMock(calls, { scannerCloseFailure: true });

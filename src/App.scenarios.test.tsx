@@ -242,7 +242,7 @@ describe('Полный прогон пользовательских сцена�
   });
   afterEach(() => { localStorage.clear(); __resetInvokeForTests(); vi.restoreAllMocks(); });
 
-  it('removes the old accepted file when a replacement fails to parse', async () => {
+  it('preserves the previously accepted source after a corrupt file replacement, without publishing during the attempt', async () => {
     const calls: Call[] = [];
     installMock(calls, { parsePathFailureOnCall: 2 });
     render(<App />);
@@ -250,13 +250,15 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(screen.getByRole('button', { name: 'Выбрать исходный файл' }));
     await waitFor(() => expect(calls.filter((call) => call.command === 'parse_source_path')).toHaveLength(1));
     await screen.findByText('Источник принят');
+    expect(screen.getByText('Источник.docx')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Заменить исходный файл' }));
     await waitFor(() => expect(calls.filter((call) => call.command === 'parse_source_path')).toHaveLength(2));
-    await screen.findByText('Добавьте исходный файл');
-    expect(screen.queryByText('Источник принят')).toBeNull();
-    fireEvent.keyDown(document, { key: 'Enter', ctrlKey: true });
+    await screen.findByText('Источник принят');
+    expect(screen.getByText('Источник.docx')).toBeTruthy();
+    expect(screen.queryByText('Добавьте исходный файл')).toBeNull();
+    // A failed attempted replacement cannot silently publish anything.
     expect(calls.filter((call) => call.command === 'render_docx_batch')).toHaveLength(0);
-    expect(screen.getByRole('button', { name: 'Выбрать исходный файл' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Заменить исходный файл' })).toBeTruthy();
   });
 
   it('never creates a DOCX for unparsed edited text or a stale source review', async () => {

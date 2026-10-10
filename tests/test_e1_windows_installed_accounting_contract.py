@@ -38,8 +38,18 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     runtime_validation = (ROOT / "src" / "lib" / "runtimeValidation.ts").read_text(encoding="utf-8")
     scanner_engine = (ROOT / "crates" / "dokkomplekt-core" / "src" / "scanner_engine.rs").read_text(encoding="utf-8")
     advanced_tools = (ROOT / "src" / "components" / "AdvancedToolsPanel.tsx").read_text(encoding="utf-8")
-    assert app_source.count("semanticExtract(") == 1, "automatic source intake must not run a second state-owning semantic extraction"
-    assert app_source.count("semanticPreviewFromParsedSource(res)") == 3
+    source_ingress = (ROOT / "src" / "hooks" / "useSourceIngress.ts").read_text(encoding="utf-8")
+    assert "useSourceIngress({" in app_source, "every ingress route must be wired through the canonical source lifecycle"
+    assert app_source.count("semanticExtract(") + source_ingress.count("semanticExtract(") == 1, (
+        "automatic source intake must not run a second state-owning semantic extraction"
+    )
+    assert app_source.count("semanticPreviewFromParsedSource(res)") + source_ingress.count(
+        "semanticPreviewFromParsedSource(res)"
+    ) == 3, "native picker, text and web intake must share the canonical semantic preview"
+    assert "acceptedSourceRevision.current = revision" in source_ingress, (
+        "recognized source must be bound to the accepted revision before publication"
+    )
+    assert "getSourceRevision: acceptedRevision" in app_source
 
     assert "preceding installed baseline smoke" in source
     assert "content-packs\\tier1-accounting-ru\\templates\\service_act.docx" in source

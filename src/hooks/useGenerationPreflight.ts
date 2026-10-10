@@ -8,6 +8,8 @@ export interface GenerationSnapshot {
   folderParts: FolderNamePartDto[];
   outputRoot: string;
   documentRevisionTokens: Record<string, string>;
+  /** Commit-boundary identity of the recognized source, never just its visible filename. */
+  sourceRevision?: number;
   autoPrint: boolean;
   printCopies: Record<string, number>;
 }
@@ -22,6 +24,8 @@ interface UseGenerationPreflightOptions {
   printCopies: Record<string, number>;
   preflightPlan: WorkflowPlan | null;
   preflightLoading: boolean;
+  /** Returns null until the source has been parsed and accepted for this case. */
+  getSourceRevision?: () => number | null;
   shortcutEnabled?: boolean;
   /** Keep the review surface when a non-prompt user option (for example sick leave) still needs an explicit choice. */
   requiresExplicitReview?: boolean;
@@ -51,10 +55,25 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   const confirmationInFlight = useRef(false);
   const openingInFlight = useRef(false);
 
+  function sourceIsCurrent(snapshot?: GenerationSnapshot): boolean {
+    if (!options.getSourceRevision) return true;
+    const current = options.getSourceRevision();
+    return current !== null && (snapshot === undefined || current === snapshot.sourceRevision);
+  }
+
+  function rejectStaleSource() {
+    const message = 'Исходник изменился или ещё не распознан. Используйте текущий текст/файл и откройте создание заново. Документы не созданы.';
+    setGenerationPreflightOpen(false);
+    setGenerationSnapshot(null);
+    setGenerationError(message);
+    options.setPreflightPlan(null);
+    options.setStatus(message);
+  }
+
   useEffect(() => {
     function onGenerationShortcut(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return;
-      if (options.shortcutEnabled === false || generationPreflightOpen || options.preflightLoading || options.selectedDocumentIds.length === 0) return;
+      if (options.shortcutEnabled === false || generationPreflightOpen || options.preflightLoading || options.selectedDocumentIds.length === 0 || !sourceIsCurrent()) return;
       event.preventDefault();
       void openGenerationPreflight();
     }
@@ -67,6 +86,10 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   async function openGenerationPreflight() {
     if (!options.selectedDocumentIds.length) {
       options.setStatus('Отметьте хотя бы один документ для комплекта.');
+      return;
+    }
+    if (!sourceIsCurrent()) {
+      rejectStaleSource();
       return;
     }
     if (options.preflightLoading || openingInFlight.current || confirmationInFlight.current) {
@@ -86,10 +109,15 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       folderParts: [...options.folderParts],
       outputRoot: options.outputRoot.trim(),
       documentRevisionTokens: { ...options.documentRevisionTokens },
+      ...(options.getSourceRevision ? { sourceRevision: options.getSourceRevision() ?? undefined } : {}),
       autoPrint: options.autoPrint,
       printCopies: { ...options.printCopies },
     };
     const workflow = await options.requestWorkflowPlan(snapshot);
+    if (!sourceIsCurrent(snapshot)) {
+      rejectStaleSource();
+      return;
+    }
     if (!workflow) {
       options.setStatus('Не удалось получить финальный план создания. Комплект не создан.');
       return;
@@ -117,6 +145,10 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     try {
       options.setStatus('Все обязательные данные уже найдены. Формируется комплект…');
       const freshWorkflow = await options.requestWorkflowPlan(snapshot);
+      if (!sourceIsCurrent(snapshot)) {
+        rejectStaleSource();
+        return;
+      }
       if (!freshWorkflow) {
         const message = 'Не удалось обновить план создания. Комплект не создан.';
         setGenerationError(message);
@@ -156,6 +188,10 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
           continue_without_value: Boolean(options.skippedAnswers[prompt.field_id]),
         }));
         const applied = await options.applyAnswers(snapshot, payload);
+        if (!sourceIsCurrent(snapshot)) {
+          rejectStaleSource();
+          return;
+        }
         if (!applied) return;
         if (!applied.accepted) {
           const message = applied.message || `Не заполнено полей: ${applied.still_missing.length}`;
@@ -168,6 +204,14 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
 
       setGenerationError(null);
       setGenerationValidationFieldId(null);
+      if (!sourceIsCurrent(snapshot)) {
+        rejectStaleSource();
+        return;
+      }
+      if (!sourceIsCurrent(snapshot)) {
+        rejectStaleSource();
+        return;
+      }
       const generationFailure = await options.onConfirmed(snapshot);
       if (generationFailure) {
         setGenerationError(generationFailure);
@@ -187,6 +231,10 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     const reviewedWorkflow = options.preflightPlan;
     const snapshot = generationSnapshot;
     if (!reviewedWorkflow || !snapshot?.documentIds.length || options.preflightLoading || confirmationInFlight.current) return;
+    if (!sourceIsCurrent(snapshot)) {
+      rejectStaleSource();
+      return;
+    }
     confirmationInFlight.current = true;
     try {
       // Re-read the backend-owned plan at the actual commit boundary. The case can
@@ -195,6 +243,10 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       // now-satisfied field as an "unknown popup answer". The UI still owns no
       // business rules: it submits only the newest server plan.
       const workflow = await options.requestWorkflowPlan(snapshot);
+      if (!sourceIsCurrent(snapshot)) {
+        rejectStaleSource();
+        return;
+      }
       if (!workflow) {
         const message = 'Не удалось обновить план создания. Комплект не создан.';
         setGenerationError(message);
@@ -249,6 +301,10 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
           continue_without_value: Boolean(options.skippedAnswers[prompt.field_id]),
         }));
         const applied = await options.applyAnswers(snapshot, payload);
+        if (!sourceIsCurrent(snapshot)) {
+          rejectStaleSource();
+          return;
+        }
         if (!applied) return;
         if (!applied.accepted) {
           const message = applied.message || `Не заполнено полей: ${applied.still_missing.length}`;

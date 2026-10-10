@@ -12,10 +12,11 @@ const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secon
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, skippable: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
-function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number; renderFailureOnCall?: number; saveStateFailure?: boolean; scannerCloseFailure?: boolean } = {}) {
+function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number; renderFailureOnCall?: number; saveStateFailure?: boolean; scannerCloseFailure?: boolean; parsePathFailureOnCall?: number } = {}) {
   const bundleMode = options.bundleMode ?? 'auto';
   let firstRunFailures = options.firstRunFailures ?? 0;
   let renderBatchCallCount = 0;
+  let parsePathCallCount = 0;
   const bundleDocumentIds = bundleMode === 'none' ? [] : bundleMode === 'review' ? ['acc_1'] : ['acc_1', 'doc_2'];
   const routing = { domain: 'Accounting', domain_confidence: 0.99, predicted_role: 'invoice', cluster_id: 'invoice', cluster_confidence: 0.99, recommended_document_ids: bundleDocumentIds, matches: [{ document_id: 'acc_1', button_label: 'Счёт на оплату', role_id: 'invoice', score: 0.99, evidence: ['title'] }], auto_select: bundleMode === 'auto', review_required: bundleMode !== 'auto', reasons: ['route'] };
   const bundleDecision = { document_ids: bundleDocumentIds, source: bundleMode === 'auto' ? 'deterministic_route' : bundleMode === 'review' ? 'review_proposal' : 'no_safe_proposal', confidence: 0.99, auto_apply: bundleMode === 'auto', review_required: bundleMode !== 'auto', question: bundleMode === 'auto' ? null : 'Подтвердите состав', reasons: ['route'] };
@@ -39,6 +40,11 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'pick_source_file':
         return { file_name: 'Источник.docx', selected_path: 'C:/fixtures/Источник.docx' } as never;
       case 'parse_source_path':
+        parsePathCallCount += 1;
+        if (options.parsePathFailureOnCall === parsePathCallCount) {
+          throw new Error('replacement DOCX unreadable');
+        }
+        return { source_text: 'Счёт № 148', source_path: '/app-data/scanner-sources/source.docx', source_kind: 'docx', layout_items: [], recognition_proof: [], semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
       case 'parse_source_file':
         return { source_text: 'Счёт № 148', source_path: '/app-data/scanner-sources/source.docx', source_kind: 'docx', layout_items: [], recognition_proof: [], semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
       case 'get_intake_capabilities':
@@ -235,6 +241,56 @@ describe('Полный прогон пользовательских сцена�
     localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
   });
   afterEach(() => { localStorage.clear(); __resetInvokeForTests(); vi.restoreAllMocks(); });
+
+  it('preserves the previously accepted source after a corrupt file replacement, without publishing during the attempt', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { parsePathFailureOnCall: 2 });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Выбрать исходный файл' });
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать исходный файл' }));
+    await waitFor(() => expect(calls.filter((call) => call.command === 'parse_source_path')).toHaveLength(1));
+    await screen.findByText('Источник принят');
+    expect(screen.getByText('Источник.docx')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Заменить исходный файл' }));
+    await waitFor(() => expect(calls.filter((call) => call.command === 'parse_source_path')).toHaveLength(2));
+    await screen.findByText('Источник принят');
+    expect(screen.getByText('Источник.docx')).toBeTruthy();
+    expect(screen.queryByText('Добавьте исходный файл')).toBeNull();
+    // A failed attempted replacement cannot silently publish anything.
+    expect(calls.filter((call) => call.command === 'render_docx_batch')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Заменить исходный файл' })).toBeTruthy();
+  });
+
+  it('never creates a DOCX for unparsed edited text or a stale source review', async () => {
+    const calls: Call[] = [];
+    installMock(calls);
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    const sourceText = screen.getByPlaceholderText('Вставьте текст источника');
+    fireEvent.change(sourceText, { target: { value: 'Счёт № 148' } });
+    // Ctrl+Enter must not ask the backend to generate using the previous case.
+    fireEvent.keyDown(document, { key: 'Enter', ctrlKey: true });
+    expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Использовать текст' }));
+    await waitFor(() => expect(calls.some((call) => call.command === 'parse_source')).toBe(true));
+    const createButton = await screen.findByRole('button', { name: /Проверить и создать \(2\)/ });
+    await waitFor(() => expect((createButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(createButton);
+    const review = await screen.findByRole('dialog', { name: /Проверка данных|Проверить|Создание|Комплект/i });
+    // Editing the visible source invalidates the previously accepted backend case.
+    fireEvent.change(sourceText, { target: { value: 'Другой пациент, № 999' } });
+    fireEvent.click(within(review).getByRole('button', { name: 'Создать документы' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Проверка данных|Проверить|Создание|Комплект/i })).toBeNull());
+    expect(calls.filter((call) => call.command === 'render_docx_batch')).toHaveLength(0);
+    // The review may already have been closed by the source-change effect.
+    // Its transient status text is not part of the publication safety boundary:
+    // the user must explicitly parse the new source before any shortcut works.
+    fireEvent.keyDown(document, { key: 'Enter', ctrlKey: true });
+    expect(calls.filter((call) => call.command === 'render_docx_batch')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Использовать текст' })).toBeTruthy();
+  });
 
   it('retains the guided Scanner modal if Word close fails instead of reporting a successful cancellation', async () => {
     const calls: Call[] = [];

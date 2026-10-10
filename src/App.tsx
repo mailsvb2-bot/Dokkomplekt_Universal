@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, RecognitionProofEntry, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, RecognitionProofEntry, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, pickLearningFiles, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
-  pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -21,6 +21,7 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
+import { useSourceIngress } from './hooks/useSourceIngress';
 import { closeGuidedScannerSafely } from './lib/guidedScannerShutdown';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
@@ -35,10 +36,10 @@ import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplate
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, currentDefaultYear, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
+  bundleSelectionFromDecision, createdPrintItems, currentDefaultYear, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, preserveSelectedDocumentIds, promptToPopupField, readFileBytes,
-  replaceAllLiteral, semanticPreviewFromParsedSource, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
+  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 export function App() { return <AppDialogProvider><AppContent /></AppDialogProvider>; }
 function AppContent() {
@@ -208,6 +209,18 @@ function AppContent() {
     return () => { cancelled = true; };
   }, [sourceFileName, parsed, selectedDocIds, sickLeave, folderParts]);
 
+  const {
+    invalidateSource, acceptedRevision, changeSourceText, parseSourceNow,
+    pickSourceFileNative, processSourceFile, loadWebSource,
+  } = useSourceIngress({
+    sourceText, sourceFileName, sourceFilePath, webSourceUrl, parsed, semantic,
+    preflightPlan, lastOutput,
+    setSourceText, setSourceFileName, setSourceFilePath, setWebSourceUrl,
+    setParsed, setRecognitionProof, setSemantic, setPlan, setPreflightPlan, setPreview,
+    setLastOutput, setStatus, run,
+    clearSourceScopedUiState, ensureComponentForSource, applyBundleDecision,
+  });
+
   const previewTitle = detectTitle(templateText) || 'Документ';
   const previewLabel = buttonLabel.trim() || previewTitle;
 
@@ -304,6 +317,7 @@ function AppContent() {
   }
 
   async function resetCurrentCase() {
+    invalidateSource();
     documentLoadRevision.current += 1;
     const cleared = await run('reset_case', () => resetCase());
     if (!cleared) return;
@@ -327,108 +341,6 @@ function AppContent() {
       return selection.summary;
     }
     return `${selection.summary} Ручной выбор документов сохранён и не был заменён автоматически.`;
-  }
-
-  function changeSourceText(value: string) {
-    setSourceText(value);
-    if (parsed || sourceFileName || sourceFilePath || semantic || preflightPlan || lastOutput) {
-      setSourceFileName(null);
-      setSourceFilePath(null);
-      setParsed(null);
-      setSemantic(null);
-      setPlan(null);
-      setPreflightPlan(null);
-      setPreview(null);
-      setLastOutput(null);
-      setStatus('Текст источника изменён. Нажмите «Использовать текст», чтобы заново распознать данные перед созданием документов.');
-    }
-  }
-
-  async function parseSourceNow() {
-    const res = await run('parse_source', () => parseSource(sourceText, currentDefaultYear()));
-    if (!res) return;
-    setSourceFileName(null);
-    setSourceFilePath(null);
-    setWebSourceUrl('');
-    clearSourceScopedUiState();
-    setSemantic(semanticPreviewFromParsedSource(res));
-    const count = Object.keys(res.semantic_case?.values ?? {}).length;
-    setParsed({
-      title: res.report?.recognized_title ?? 'Документ распознан',
-      count,
-      warnings: res.report?.warnings ?? [],
-      sourceKind: 'manual_text',
-      layoutRows: 0,
-      tableRows: 0,
-    });
-    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
-    setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
-  }
-
-  async function applyParsedSourceFile(res: ParseSourceFileResponse, fileName: string) {
-    clearSourceScopedUiState();
-    setSourceFileName(fileName);
-    setSourceFilePath(res.source_path);
-    setSourceText(res.source_text);
-    setWebSourceUrl('');
-    setRecognitionProof(res.recognition_proof ?? []);
-    setSemantic(semanticPreviewFromParsedSource(res));
-    const count = Object.keys(res.semantic_case?.values ?? {}).length;
-    const layoutItems = res.layout_items ?? [];
-    setParsed({
-      title: res.report?.recognized_title ?? fileName,
-      count,
-      warnings: res.report?.warnings ?? [],
-      sourceKind: res.source_kind ?? 'file',
-      layoutRows: layoutItems.length,
-      tableRows: layoutItems.filter((item) => item.item_kind === 'table_row').length,
-    });
-    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
-    setStatus(`Файл «${fileName}» прочитан. Найдено значений: ${count}.${routingSummary}`);
-  }
-
-  async function pickSourceFileNative() {
-    const picked = await run('pick_source_file', () => pickSourceFile());
-    if (!picked || !(await ensureComponentForSource(picked.file_name))) return;
-    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, currentDefaultYear()));
-    if (!res) return;
-    await applyParsedSourceFile(res, picked.file_name);
-  }
-
-  async function processSourceFile(file: File) {
-    if (!(await ensureComponentForSource(file.name))) return;
-    const buffer = await readFileBytes(file);
-    const res = await run('parse_source_file', () =>
-      parseSourceFile(file.name, arrayBufferToBase64(buffer), currentDefaultYear()));
-    if (!res) return;
-    await applyParsedSourceFile(res, file.name);
-  }
-
-
-  async function loadWebSource() {
-    const url = webSourceUrl.trim();
-    if (!url) {
-      setStatus('Укажите HTTPS-адрес сайта или API.');
-      return;
-    }
-    const res = await run('parse_web_source', () => parseWebSource(url, currentDefaultYear()));
-    if (!res) return;
-    clearSourceScopedUiState();
-    setSourceFileName(res.final_url);
-    setSourceFilePath(null);
-    setSourceText(res.source_text);
-    setSemantic(semanticPreviewFromParsedSource(res));
-    const count = Object.keys(res.semantic_case?.values ?? {}).length;
-    setParsed({
-      title: res.report?.recognized_title ?? res.final_url,
-      count,
-      warnings: res.report?.warnings ?? [],
-      sourceKind: 'https',
-      layoutRows: 0,
-      tableRows: 0,
-    });
-    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
-    setStatus(`Источник загружен. Найдено значений: ${count}.${routingSummary}`);
   }
 
   async function selectDocument(doc: DocumentTemplateSpec) {
@@ -569,6 +481,9 @@ function AppContent() {
   }
 
   async function performGenerateSelectedDocuments(snapshot: GenerationSnapshot): Promise<string | null> {
+    if (acceptedRevision() === null || snapshot.sourceRevision !== acceptedRevision()) {
+      return 'Исходник изменился после проверки. Заново распознайте источник перед созданием. Ничего не создано.';
+    }
     if (!generationDocumentRevisionsMatch(snapshot.documentRevisionTokens, documents)) {
       return 'Комплект изменился после проверки. Нажмите «Проверить и создать» ещё раз. Ничего не создано.';
     }
@@ -579,6 +494,9 @@ function AppContent() {
     let policyError: string | null = null;
     const existingOutputPolicy = await chooseExistingOutputPolicy(snapshot, (detail) => { policyError = detail; });
     if (!existingOutputPolicy) return policyError ? `Не удалось подготовить папку результата: ${policyError}` : null;
+    if (acceptedRevision() === null || snapshot.sourceRevision !== acceptedRevision()) {
+      return 'Исходник изменился во время проверки папки. Заново распознайте источник перед созданием. Ничего не создано.';
+    }
     // The previous successful batch remains useful while the user only reviews or
     // cancels preflight. Once a new render actually starts it is no longer the
     // current result and must not survive a failed attempt as a false green state.
@@ -611,7 +529,7 @@ function AppContent() {
   const loadWorkflowPlan = (documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts) => documentIds.length === 1 ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts) : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   const { generationPreflightOpen, generationDocumentIds, generationError, generationValidationFieldId, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds), autoPrint, printCopies,
-    preflightPlan, preflightLoading, shortcutEnabled: !setupOpen && !busy, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
+    preflightPlan, preflightLoading, getSourceRevision: acceptedRevision, shortcutEnabled: !setupOpen && !busy, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
     applyAnswers: (snapshot, payload) => snapshot.documentIds.length === 1
       ? run('apply_popup', () => applyPopup(snapshot.documentIds[0], snapshot.sickLeaveEnabled, payload, snapshot.folderParts))

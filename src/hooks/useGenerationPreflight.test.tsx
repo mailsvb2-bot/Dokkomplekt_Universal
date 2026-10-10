@@ -21,6 +21,84 @@ function context(documentId: string) {
 }
 
 describe('useGenerationPreflight', () => {
+
+  it('does not request a backend plan or publish from an unrecognized source', async () => {
+    const setStatus = vi.fn();
+    const requestWorkflowPlan = vi.fn(async () => ({
+      document_id: 'contract', prompts: [], blocked: false, block_reasons: [],
+    } as WorkflowPlan));
+    const onConfirmed = vi.fn(async () => null);
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['contract'], ...context('contract'),
+      getSourceRevision: () => null,
+      preflightPlan: null, preflightLoading: false, answers: {}, skippedAnswers: {},
+      setPreflightPlan: vi.fn(), setStatus, requestWorkflowPlan,
+      applyAnswers: vi.fn(async () => null), onConfirmed,
+    }));
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    expect(requestWorkflowPlan).not.toHaveBeenCalled();
+    expect(onConfirmed).not.toHaveBeenCalled();
+    expect(setStatus).toHaveBeenCalledWith(expect.stringContaining('Исходник изменился или ещё не распознан'));
+    expect(result.current.generationPreflightOpen).toBe(false);
+  });
+
+  it('rejects an old modal when the accepted source changes after review', async () => {
+    let sourceRevision: number | null = 17;
+    const readyPlan: WorkflowPlan = {
+      document_id: 'contract', prompts: [], blocked: false, block_reasons: [],
+    };
+    const requestWorkflowPlan = vi.fn(async () => readyPlan);
+    const onConfirmed = vi.fn(async () => null);
+    const setStatus = vi.fn();
+    const { result, rerender } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['contract'], ...context('contract'),
+      getSourceRevision: () => sourceRevision,
+      requiresExplicitReview: true, preflightPlan: readyPlan,
+      preflightLoading: false, answers: {}, skippedAnswers: {},
+      setPreflightPlan: vi.fn(), setStatus, requestWorkflowPlan,
+      applyAnswers: vi.fn(async () => null), onConfirmed,
+    }));
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    expect(result.current.generationPreflightOpen).toBe(true);
+    expect(requestWorkflowPlan).toHaveBeenCalledTimes(1);
+    sourceRevision = 18;
+    rerender();
+    await act(async () => { await result.current.confirmGenerationPreflight(); });
+    expect(requestWorkflowPlan).toHaveBeenCalledTimes(1);
+    expect(onConfirmed).not.toHaveBeenCalled();
+    expect(result.current.generationPreflightOpen).toBe(false);
+    expect(setStatus).toHaveBeenLastCalledWith(expect.stringContaining('Исходник изменился'));
+  });
+
+  it('does not publish if the source changes during async commit-boundary revalidation', async () => {
+    let sourceRevision: number | null = 21;
+    const readyPlan: WorkflowPlan = {
+      document_id: 'contract', prompts: [], blocked: false, block_reasons: [],
+    };
+    let resolveSecond!: (value: WorkflowPlan) => void;
+    const second = new Promise<WorkflowPlan>((resolve) => { resolveSecond = resolve; });
+    const requestWorkflowPlan = vi.fn()
+      .mockResolvedValueOnce(readyPlan)
+      .mockImplementationOnce(() => second);
+    const onConfirmed = vi.fn(async () => null);
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['contract'], ...context('contract'),
+      getSourceRevision: () => sourceRevision,
+      preflightPlan: readyPlan, preflightLoading: false,
+      answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn(),
+      setStatus: vi.fn(), requestWorkflowPlan,
+      applyAnswers: vi.fn(async () => null), onConfirmed,
+    }));
+    let opening!: Promise<void>;
+    act(() => { opening = result.current.openGenerationPreflight(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(requestWorkflowPlan).toHaveBeenCalledTimes(2);
+    sourceRevision = null; // user started replacing an already parsed source
+    await act(async () => { resolveSecond(readyPlan); await opening; });
+    expect(onConfirmed).not.toHaveBeenCalled();
+    expect(result.current.generationPreflightOpen).toBe(false);
+  });
+
   it('opens the canonical review dialog for a blocked plan instead of making the create click look dead', async () => {
     const setPreflightPlan = vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>;
     const setStatus = vi.fn();

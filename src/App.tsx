@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, RecognitionProofEntry, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, RecognitionProofEntry, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, pickLearningFiles, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
-  pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -21,6 +21,7 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
+import { useSourceIngress } from './hooks/useSourceIngress';
 import { closeGuidedScannerSafely } from './lib/guidedScannerShutdown';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
@@ -35,10 +36,10 @@ import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplate
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, currentDefaultYear, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
+  bundleSelectionFromDecision, createdPrintItems, currentDefaultYear, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, preserveSelectedDocumentIds, promptToPopupField, readFileBytes,
-  replaceAllLiteral, semanticPreviewFromParsedSource, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
+  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 export function App() { return <AppDialogProvider><AppContent /></AppDialogProvider>; }
 function AppContent() {
@@ -67,22 +68,6 @@ function AppContent() {
     setSelectedDocumentIds: setSelectedDocIds,
     setStatus,
   });
-  // An accepted source is valid only for the exact successful parser response.
-  // This mutable identity changes immediately on input edits, before React
-  // effects or a stale preflight modal can submit an old backend case.
-  const sourceRevision = useRef(0);
-  const acceptedSourceRevision = useRef<number | null>(null);
-  function invalidateSource(): number {
-    sourceRevision.current += 1;
-    acceptedSourceRevision.current = null;
-    return sourceRevision.current;
-  }
-  function acceptedRevision(): number | null {
-    return acceptedSourceRevision.current === sourceRevision.current
-      ? acceptedSourceRevision.current
-      : null;
-  }
-
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);
   const [sourceFilePath, setSourceFilePath] = useState<string | null>(null);
@@ -224,6 +209,18 @@ function AppContent() {
     return () => { cancelled = true; };
   }, [sourceFileName, parsed, selectedDocIds, sickLeave, folderParts]);
 
+  const {
+    invalidateSource, acceptedRevision, changeSourceText, parseSourceNow,
+    pickSourceFileNative, processSourceFile, loadWebSource,
+  } = useSourceIngress({
+    sourceText, sourceFileName, sourceFilePath, webSourceUrl, parsed, semantic,
+    preflightPlan, lastOutput,
+    setSourceText, setSourceFileName, setSourceFilePath, setWebSourceUrl,
+    setParsed, setRecognitionProof, setSemantic, setPlan, setPreflightPlan, setPreview,
+    setLastOutput, setStatus, run,
+    clearSourceScopedUiState, ensureComponentForSource, applyBundleDecision,
+  });
+
   const previewTitle = detectTitle(templateText) || 'Документ';
   const previewLabel = buttonLabel.trim() || previewTitle;
 
@@ -344,126 +341,6 @@ function AppContent() {
       return selection.summary;
     }
     return `${selection.summary} Ручной выбор документов сохранён и не был заменён автоматически.`;
-  }
-
-  function changeSourceText(value: string) {
-    invalidateSource();
-    setSourceText(value);
-    if (parsed || sourceFileName || sourceFilePath || semantic || preflightPlan || lastOutput) {
-      setSourceFileName(null);
-      setSourceFilePath(null);
-      setParsed(null);
-      setSemantic(null);
-      setPlan(null);
-      setPreflightPlan(null);
-      setPreview(null);
-      setLastOutput(null);
-      setStatus('Текст источника изменён. Нажмите «Использовать текст», чтобы заново распознать данные перед созданием документов.');
-    }
-  }
-
-  async function parseSourceNow() {
-    const revision = invalidateSource();
-    setParsed(null);
-    clearSourceScopedUiState();
-    const res = await run('parse_source', () => parseSource(sourceText, currentDefaultYear()));
-    if (!res || revision !== sourceRevision.current) return;
-    acceptedSourceRevision.current = revision;
-    setSourceFileName(null);
-    setSourceFilePath(null);
-    setWebSourceUrl('');
-    clearSourceScopedUiState();
-    setSemantic(semanticPreviewFromParsedSource(res));
-    const count = Object.keys(res.semantic_case?.values ?? {}).length;
-    setParsed({
-      title: res.report?.recognized_title ?? 'Документ распознан',
-      count,
-      warnings: res.report?.warnings ?? [],
-      sourceKind: 'manual_text',
-      layoutRows: 0,
-      tableRows: 0,
-    });
-    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
-    setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
-  }
-
-  async function applyParsedSourceFile(res: ParseSourceFileResponse, fileName: string, revision: number) {
-    if (revision !== sourceRevision.current) return;
-    acceptedSourceRevision.current = revision;
-    clearSourceScopedUiState();
-    setSourceFileName(fileName);
-    setSourceFilePath(res.source_path);
-    setSourceText(res.source_text);
-    setWebSourceUrl('');
-    setRecognitionProof(res.recognition_proof ?? []);
-    setSemantic(semanticPreviewFromParsedSource(res));
-    const count = Object.keys(res.semantic_case?.values ?? {}).length;
-    const layoutItems = res.layout_items ?? [];
-    setParsed({
-      title: res.report?.recognized_title ?? fileName,
-      count,
-      warnings: res.report?.warnings ?? [],
-      sourceKind: res.source_kind ?? 'file',
-      layoutRows: layoutItems.length,
-      tableRows: layoutItems.filter((item) => item.item_kind === 'table_row').length,
-    });
-    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
-    setStatus(`Файл «${fileName}» прочитан. Найдено значений: ${count}.${routingSummary}`);
-  }
-
-  async function pickSourceFileNative() {
-    const picked = await run('pick_source_file', () => pickSourceFile());
-    if (!picked) return;
-    const revision = invalidateSource();
-    setParsed(null);
-    clearSourceScopedUiState();
-    if (!(await ensureComponentForSource(picked.file_name))) return;
-    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, currentDefaultYear()));
-    if (!res) return;
-    await applyParsedSourceFile(res, picked.file_name, revision);
-  }
-
-  async function processSourceFile(file: File) {
-    const revision = invalidateSource();
-    setParsed(null);
-    clearSourceScopedUiState();
-    if (!(await ensureComponentForSource(file.name))) return;
-    const buffer = await readFileBytes(file);
-    const res = await run('parse_source_file', () =>
-      parseSourceFile(file.name, arrayBufferToBase64(buffer), currentDefaultYear()));
-    if (!res) return;
-    await applyParsedSourceFile(res, file.name, revision);
-  }
-
-
-  async function loadWebSource() {
-    const url = webSourceUrl.trim();
-    if (!url) {
-      setStatus('Укажите HTTPS-адрес сайта или API.');
-      return;
-    }
-    const revision = invalidateSource();
-    setParsed(null);
-    clearSourceScopedUiState();
-    const res = await run('parse_web_source', () => parseWebSource(url, currentDefaultYear()));
-    if (!res || revision !== sourceRevision.current) return;
-    acceptedSourceRevision.current = revision;
-    clearSourceScopedUiState();
-    setSourceFileName(res.final_url);
-    setSourceFilePath(null);
-    setSourceText(res.source_text);
-    setSemantic(semanticPreviewFromParsedSource(res));
-    const count = Object.keys(res.semantic_case?.values ?? {}).length;
-    setParsed({
-      title: res.report?.recognized_title ?? res.final_url,
-      count,
-      warnings: res.report?.warnings ?? [],
-      sourceKind: 'https',
-      layoutRows: 0,
-      tableRows: 0,
-    });
-    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
-    setStatus(`Источник загружен. Найдено значений: ${count}.${routingSummary}`);
   }
 
   async function selectDocument(doc: DocumentTemplateSpec) {

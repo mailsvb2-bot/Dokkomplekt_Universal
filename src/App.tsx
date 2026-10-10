@@ -67,6 +67,22 @@ function AppContent() {
     setSelectedDocumentIds: setSelectedDocIds,
     setStatus,
   });
+  // An accepted source is valid only for the exact successful parser response.
+  // This mutable identity changes immediately on input edits, before React
+  // effects or a stale preflight modal can submit an old backend case.
+  const sourceRevision = useRef(0);
+  const acceptedSourceRevision = useRef<number | null>(null);
+  function invalidateSource(): number {
+    sourceRevision.current += 1;
+    acceptedSourceRevision.current = null;
+    return sourceRevision.current;
+  }
+  function acceptedRevision(): number | null {
+    return acceptedSourceRevision.current === sourceRevision.current
+      ? acceptedSourceRevision.current
+      : null;
+  }
+
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);
   const [sourceFilePath, setSourceFilePath] = useState<string | null>(null);
@@ -304,6 +320,7 @@ function AppContent() {
   }
 
   async function resetCurrentCase() {
+    invalidateSource();
     documentLoadRevision.current += 1;
     const cleared = await run('reset_case', () => resetCase());
     if (!cleared) return;
@@ -330,6 +347,7 @@ function AppContent() {
   }
 
   function changeSourceText(value: string) {
+    invalidateSource();
     setSourceText(value);
     if (parsed || sourceFileName || sourceFilePath || semantic || preflightPlan || lastOutput) {
       setSourceFileName(null);
@@ -345,8 +363,12 @@ function AppContent() {
   }
 
   async function parseSourceNow() {
+    const revision = invalidateSource();
+    setParsed(null);
+    clearSourceScopedUiState();
     const res = await run('parse_source', () => parseSource(sourceText, currentDefaultYear()));
-    if (!res) return;
+    if (!res || revision !== sourceRevision.current) return;
+    acceptedSourceRevision.current = revision;
     setSourceFileName(null);
     setSourceFilePath(null);
     setWebSourceUrl('');
@@ -365,7 +387,9 @@ function AppContent() {
     setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
 
-  async function applyParsedSourceFile(res: ParseSourceFileResponse, fileName: string) {
+  async function applyParsedSourceFile(res: ParseSourceFileResponse, fileName: string, revision: number) {
+    if (revision !== sourceRevision.current) return;
+    acceptedSourceRevision.current = revision;
     clearSourceScopedUiState();
     setSourceFileName(fileName);
     setSourceFilePath(res.source_path);
@@ -389,19 +413,26 @@ function AppContent() {
 
   async function pickSourceFileNative() {
     const picked = await run('pick_source_file', () => pickSourceFile());
-    if (!picked || !(await ensureComponentForSource(picked.file_name))) return;
+    if (!picked) return;
+    const revision = invalidateSource();
+    setParsed(null);
+    clearSourceScopedUiState();
+    if (!(await ensureComponentForSource(picked.file_name))) return;
     const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, currentDefaultYear()));
     if (!res) return;
-    await applyParsedSourceFile(res, picked.file_name);
+    await applyParsedSourceFile(res, picked.file_name, revision);
   }
 
   async function processSourceFile(file: File) {
+    const revision = invalidateSource();
+    setParsed(null);
+    clearSourceScopedUiState();
     if (!(await ensureComponentForSource(file.name))) return;
     const buffer = await readFileBytes(file);
     const res = await run('parse_source_file', () =>
       parseSourceFile(file.name, arrayBufferToBase64(buffer), currentDefaultYear()));
     if (!res) return;
-    await applyParsedSourceFile(res, file.name);
+    await applyParsedSourceFile(res, file.name, revision);
   }
 
 
@@ -411,8 +442,12 @@ function AppContent() {
       setStatus('Укажите HTTPS-адрес сайта или API.');
       return;
     }
+    const revision = invalidateSource();
+    setParsed(null);
+    clearSourceScopedUiState();
     const res = await run('parse_web_source', () => parseWebSource(url, currentDefaultYear()));
-    if (!res) return;
+    if (!res || revision !== sourceRevision.current) return;
+    acceptedSourceRevision.current = revision;
     clearSourceScopedUiState();
     setSourceFileName(res.final_url);
     setSourceFilePath(null);
@@ -569,6 +604,9 @@ function AppContent() {
   }
 
   async function performGenerateSelectedDocuments(snapshot: GenerationSnapshot): Promise<string | null> {
+    if (acceptedRevision() === null || snapshot.sourceRevision !== acceptedRevision()) {
+      return 'Исходник изменился после проверки. Заново распознайте источник перед созданием. Ничего не создано.';
+    }
     if (!generationDocumentRevisionsMatch(snapshot.documentRevisionTokens, documents)) {
       return 'Комплект изменился после проверки. Нажмите «Проверить и создать» ещё раз. Ничего не создано.';
     }
@@ -579,6 +617,9 @@ function AppContent() {
     let policyError: string | null = null;
     const existingOutputPolicy = await chooseExistingOutputPolicy(snapshot, (detail) => { policyError = detail; });
     if (!existingOutputPolicy) return policyError ? `Не удалось подготовить папку результата: ${policyError}` : null;
+    if (acceptedRevision() === null || snapshot.sourceRevision !== acceptedRevision()) {
+      return 'Исходник изменился во время проверки папки. Заново распознайте источник перед созданием. Ничего не создано.';
+    }
     // The previous successful batch remains useful while the user only reviews or
     // cancels preflight. Once a new render actually starts it is no longer the
     // current result and must not survive a failed attempt as a false green state.
@@ -611,7 +652,7 @@ function AppContent() {
   const loadWorkflowPlan = (documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts) => documentIds.length === 1 ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts) : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   const { generationPreflightOpen, generationDocumentIds, generationError, generationValidationFieldId, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds), autoPrint, printCopies,
-    preflightPlan, preflightLoading, shortcutEnabled: !setupOpen && !busy, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
+    preflightPlan, preflightLoading, getSourceRevision: acceptedRevision, shortcutEnabled: !setupOpen && !busy, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
     applyAnswers: (snapshot, payload) => snapshot.documentIds.length === 1
       ? run('apply_popup', () => applyPopup(snapshot.documentIds[0], snapshot.sickLeaveEnabled, payload, snapshot.folderParts))

@@ -63,15 +63,22 @@ export function useSourceIngress(options: SourceIngressOptions) {
       : null;
   }
 
-  // A failed replacement must not keep displaying an old file as an accepted
-  // source. Publication is blocked by the revision gate; the UI must agree.
-  function beginSourceReplacement(): number {
+  // A native/WebView source replacement is a transaction: the Rust intake
+  // owns the old SemanticCase until the new input has been validated and the
+  // canonical state transaction commits. Keep the last accepted UI snapshot,
+  // but suspend publication until that commit (or a verified failure).
+  function beginSourceReplacement(): { revision: number; previousAccepted: boolean } {
+    const previousAccepted = acceptedRevision() !== null;
     const revision = invalidateSource();
-    setSourceFileName(null);
-    setSourceFilePath(null);
-    setParsed(null);
-    clearSourceScopedUiState();
-    return revision;
+    return { revision, previousAccepted };
+  }
+
+  function cancelSourceReplacement(attempt: { revision: number; previousAccepted: boolean }) {
+    // A later edit/reset/replacement takes precedence. Never revive an old
+    // source revision if a newer operation has already started.
+    if (sourceRevision.current === attempt.revision && attempt.previousAccepted) {
+      acceptedSourceRevision.current = attempt.revision;
+    }
   }
 
   function changeSourceText(value: string) {
@@ -91,7 +98,11 @@ export function useSourceIngress(options: SourceIngressOptions) {
   }
 
   async function parseSourceNow() {
-    const revision = beginSourceReplacement();
+    // Unlike picking an alternate file, manual text was already explicitly
+    // edited. Failure to parse it must not resurrect the prior source.
+    const revision = invalidateSource();
+    setParsed(null);
+    clearSourceScopedUiState();
     const res = await run('parse_source', () => parseSource(sourceText, currentDefaultYear()));
     if (!res || revision !== sourceRevision.current) return;
     acceptedSourceRevision.current = revision;
@@ -140,21 +151,29 @@ export function useSourceIngress(options: SourceIngressOptions) {
   async function pickSourceFileNative() {
     const picked = await run('pick_source_file', () => pickSourceFile());
     if (!picked) return;
-    const revision = beginSourceReplacement();
-    if (!(await ensureComponentForSource(picked.file_name))) return;
-    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, currentDefaultYear()));
-    if (!res) return;
-    await applyParsedSourceFile(res, picked.file_name, revision);
+    const attempt = beginSourceReplacement();
+    try {
+      if (!(await ensureComponentForSource(picked.file_name))) return;
+      const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, currentDefaultYear()));
+      if (!res) return;
+      await applyParsedSourceFile(res, picked.file_name, attempt.revision);
+    } finally {
+      cancelSourceReplacement(attempt);
+    }
   }
 
   async function processSourceFile(file: File) {
-    const revision = beginSourceReplacement();
-    if (!(await ensureComponentForSource(file.name))) return;
-    const buffer = await readFileBytes(file);
-    const res = await run('parse_source_file', () =>
-      parseSourceFile(file.name, arrayBufferToBase64(buffer), currentDefaultYear()));
-    if (!res) return;
-    await applyParsedSourceFile(res, file.name, revision);
+    const attempt = beginSourceReplacement();
+    try {
+      if (!(await ensureComponentForSource(file.name))) return;
+      const buffer = await readFileBytes(file);
+      const res = await run('parse_source_file', () =>
+        parseSourceFile(file.name, arrayBufferToBase64(buffer), currentDefaultYear()));
+      if (!res) return;
+      await applyParsedSourceFile(res, file.name, attempt.revision);
+    } finally {
+      cancelSourceReplacement(attempt);
+    }
   }
 
 
@@ -164,10 +183,13 @@ export function useSourceIngress(options: SourceIngressOptions) {
       setStatus('Укажите HTTPS-адрес сайта или API.');
       return;
     }
-    const revision = beginSourceReplacement();
+    const attempt = beginSourceReplacement();
     const res = await run('parse_web_source', () => parseWebSource(url, currentDefaultYear()));
-    if (!res || revision !== sourceRevision.current) return;
-    acceptedSourceRevision.current = revision;
+    if (!res || attempt.revision !== sourceRevision.current) {
+      cancelSourceReplacement(attempt);
+      return;
+    }
+    acceptedSourceRevision.current = attempt.revision;
     clearSourceScopedUiState();
     setSourceFileName(res.final_url);
     setSourceFilePath(null);

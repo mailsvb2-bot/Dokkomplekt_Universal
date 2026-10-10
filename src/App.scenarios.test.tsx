@@ -259,7 +259,12 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(within(review).getByRole('button', { name: 'Создать документы' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /Проверка данных|Проверить|Создание|Комплект/i })).toBeNull());
     expect(calls.filter((call) => call.command === 'render_docx_batch')).toHaveLength(0);
-    expect(screen.getByText(/Исходник изменился или ещё не распознан/)).toBeTruthy();
+    // The review may already have been closed by the source-change effect.
+    // Its transient status text is not part of the publication safety boundary:
+    // the user must explicitly parse the new source before any shortcut works.
+    fireEvent.keyDown(document, { key: 'Enter', ctrlKey: true });
+    expect(calls.filter((call) => call.command === 'render_docx_batch')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Использовать текст' })).toBeTruthy();
   });
 
   it('retains the guided Scanner modal if Word close fails instead of reporting a successful cancellation', async () => {
